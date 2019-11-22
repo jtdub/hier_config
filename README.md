@@ -39,30 +39,65 @@ device, and the other with the intended configuration of the device, then we com
 commands necessary to bring the device into spec.
 
 ```
->>> from hier_config import HConfig
->>> from hier_config.host import Host
+## diff between running config and compiled config
+$ diff running_config.conf compiled_config.conf
+9a10,12
+>  name switch_mgmt_10.0.3.0/24
+> !
+> vlan 4
+12a16
+>  mtu 9000
+15c19,20
+<  shutdown
+---
+>  ip access-group TEST in
+>  no shutdown
+18a24,30
+>  description switch_mgmt_10.0.3.0/24
+>  ip address 10.0.3.1 255.255.0.0
+>  ip access-group TEST in
+>  no shutdown
+> !
+> interface Vlan4
+>  mtu 9000
+
+## file listing
+$ ls
+compiled_config.conf			test_options_negate_with_undo.yml
+running_config.conf			test_tags_ios.yml
+test_options_ios.yml
+
+## drop into python shell, get imports, create options dictionary, and create host object
+>>> from hier_config import Host
 >>> import yaml
->>>
->>> options = yaml.load(open('./tests/files/test_options_ios.yml'))
->>> host = Host('example.rtr', 'ios', options)
->>>
->>> # Build HConfig object for the Running Config
-...
->>> running_config_hier = HConfig(host=host)
->>> running_config_hier.load_from_file('./tests/files/running_config.conf')
->>>
->>> # Build Hierarchical Configuration object for the Compiled Config
-...
->>> compiled_config_hier = HConfig(host=host)
->>> compiled_config_hier.load_from_file('./tests/files/compiled_config.conf')
->>>
->>> # Build Hierarchical Configuration object for the Remediation Config
-...
->>> remediation_config_hier = running_config_hier.config_to_get_to(compiled_config_hier)
->>>
->>> for line in remediation_config_hier.all_children():
-...     print(line.cisco_style_text())
-...
+>>> options = yaml.load(open('test_options_ios.yml'))
+>>> host = Host(hostname='example.rtr', os='ios', hconfig_options=options)
+
+## load running and compiled configs
+
+### loading running config from file
+>>> host.load_config_from(config_type="running", name="running_config.conf", load_file=True)
+HConfig(host=Host(hostname=example.rtr))
+
+### loading compiled config from string
+>>> with open('compiled_config.conf') as f:
+...     compiled_config = f.read()
+>>> compiled_config
+'hostname aggr-example.rtr\n!\nip access-list extended TEST\n 10 permit ip 10.0.0.0 0.0.0.7 any\n!\nvlan 2\n name switch_mgmt_10.0.2.0/24 \n!\nvlan 3\n name switch_mgmt_10.0.3.0/24\n!\nvlan 4\n name switch_mgmt_10.0.4.0/24\n!\ninterface Vlan2\n mtu 9000\n descripton switch_10.0.2.0/24 \n ip address 10.0.2.1 255.255.255.0\n ip access-group TEST in\n no shutdown\n!\ninterface Vlan3\n mtu 9000\n description switch_mgmt_10.0.3.0/24\n ip address 10.0.3.1 255.255.0.0\n ip access-group TEST in\n no shutdown\n!\ninterface Vlan4\n mtu 9000\n description switch_mgmt_10.0.4.0/24\n ip address 10.0.4.1 255.255.0.0\n ip access-group TEST in\n no shutdown\n'
+
+>>> host.load_config_from(config_type="compiled", name=compiled_config, load_file=False)
+HConfig(host=Host(hostname=example.rtr))
+
+## loading tags
+>>> host.load_tags(name="test_tags_ios.yml", load_file=True)
+[{'lineage': [{'equals': ['no ip http secure-server', 'no ip http server', 'vlan', 'no vlan']}], 'add_tags': 'safe'}, {'lineage': [{'startswith': 'interface Vlan'}, {'startswith': ['description']}], 'add_tags': 'safe'}, {'lineage': [{'startswith': ['ip access-list', 'no ip access-list', 'access-list', 'no access-list']}], 'add_tags': 'manual'}, {'lineage': [{'startswith': 'interface Vlan'}, {'startswith': ['ip address', 'no ip address', 'mtu', 'no mtu', 'ip access-group', 'no ip access-group', 'shutdown', 'no shutdown']}], 'add_tags': 'manaual'}]
+
+## building remediation
+>>> host.load_remediation()
+HConfig(host=Host(hostname=example.rtr))
+
+## displaying remediation
+>>> print(host.filter_remediation())
 vlan 3
   name switch_mgmt_10.0.3.0/24
 vlan 4
