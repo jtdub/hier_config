@@ -34,28 +34,15 @@
 
 ---
 
-## Quick Example
-
-```python
-from hier_config import WorkflowRemediation, get_hconfig, Platform
-
-running = get_hconfig(Platform.CISCO_IOS, running_config_text)
-intended = get_hconfig(Platform.CISCO_IOS, intended_config_text)
-workflow = WorkflowRemediation(running, intended)
-
-for line in workflow.remediation_config.all_children_sorted():
-    print(line.cisco_style_text())
-```
-
----
-
 ## Where to go next
 
 | Goal | Page |
 |------|------|
 | Install the library | [Install](install.md) |
 | Walk through a first diff | [Getting Started](getting-started.md) |
-| Learn about platform drivers | [Drivers](drivers.md) |
 | Understand the architecture | [Architecture](architecture.md) |
+| Learn about platform drivers | [Drivers](drivers.md) |
+| Customize or create drivers | [Customizing Drivers](customizing-drivers.md) |
 | Browse the full API | [API Reference](api-reference.md) |
+| Upgrade from v3 | [v3 to v4 Migration](migration-guide.md) |
 | Look up terminology | [Glossary](glossary.md) |

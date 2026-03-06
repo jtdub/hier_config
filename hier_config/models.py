@@ -1,7 +1,10 @@
 from enum import Enum, auto
+from typing import Literal
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, NonNegativeInt, PositiveInt
+
+TextStyle = Literal["without_comments", "merged", "with_comments"]
 
 
 class BaseModel(PydanticBaseModel):
@@ -21,7 +24,7 @@ class DumpLine(BaseModel):
 
 
 class MatchRule(BaseModel):
-    """Flexible predicate for matching an ``HConfigChild.text`` value.
+    """Flexible predicate for matching an ``HConfig.text`` value.
 
     All fields are optional; when multiple are set every criterion must match.
     Used inside all rule types (ordering, idempotency, negation, etc.).
@@ -42,10 +45,16 @@ class TagRule(BaseModel):
 
 
 class SectionalExitingRule(BaseModel):
-    """Rule defining the exit command for a hierarchical configuration section."""
+    """Rule defining the exit command for a hierarchical configuration section.
+
+    When ``at_node_level`` is True, the exit text is rendered at the same
+    indentation level as the section itself (e.g. IOS XR ``end-set``).
+    When False (the default), it is rendered one level deeper (standard ``exit``).
+    """
 
     match_rules: tuple[MatchRule, ...]
     exit_text: str
+    at_node_level: bool = False
 
 
 class SectionalOverwriteRule(BaseModel):
@@ -95,9 +104,30 @@ class PerLineSubRule(BaseModel):
 
 
 class IdempotentCommandsRule(BaseModel):
-    """Rule declaring that a command family is idempotent (last value wins)."""
+    r"""Rule declaring that a command family is idempotent (last value wins).
+
+    When ``key_extract`` is set, the regex is applied to the leaf command text
+    and the named group ``key`` is used as the idempotency identity.  This
+    makes matching explicit and avoids the heuristic normalisation in the
+    default key-generation path.
+
+    Example::
+
+        IdempotentCommandsRule(
+            match_rules=(
+                MatchRule(startswith="router bgp"),
+                MatchRule(re_search=r"neighbor \S+ description"),
+            ),
+            key_extract=r"neighbor (?P<key>\S+)",
+        )
+
+    Here two commands ``neighbor 2.2.2.2 description X`` and
+    ``neighbor 3.3.3.3 description Y`` will be keyed by the IP address,
+    correctly treating them as *different* idempotent commands.
+    """
 
     match_rules: tuple[MatchRule, ...]
+    key_extract: str | None = None
 
 
 class IdempotentCommandsAvoidRule(BaseModel):

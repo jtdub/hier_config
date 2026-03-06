@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,14 @@ from hier_config.models import (
     SectionalOverwriteRule,
     TagRule,
 )
-from hier_config.platforms.driver_base import HConfigDriverBase
+from hier_config.platforms.driver_base import (
+    HConfigDriverBase,
+    HConfigDriverRules,
+    IdempotencyRules,
+    NegationRules,
+    ParsingRules,
+    SectionalRules,
+)
 
 HCONFIG_PLATFORM_V2_TO_V3_MAPPING = {
     "ios": Platform.CISCO_IOS,
@@ -127,63 +134,79 @@ def hconfig_v3_platform_v2_os_mapper(platform: Platform) -> str:
 
 
 def _process_simple_rules(
-    v2_options: dict[str, Any],
+    options: dict[str, Any],
     key: str,
     rule_class: type[Any],
-    append_to: Callable[[Any], None],
-) -> None:
-    """Process v2 rules that only need match_rules."""
-    for rule in v2_options.get(key, ()):
+) -> tuple[Any, ...]:
+    """Process rules that only need match_rules."""
+    result: list[Any] = []
+    for rule in options.get(key, ()):
         match_rules = _collect_match_rules(rule.get("lineage", []))
-        append_to(rule_class(match_rules=match_rules))
+        result.append(rule_class(match_rules=match_rules))
+    return tuple(result)
 
 
 def _process_custom_rules(
-    v2_options: dict[str, Any], driver: HConfigDriverBase
-) -> None:
-    """Process v2 rules that require custom handling."""
-    for rule in v2_options.get("ordering", ()):
-        match_rules = _collect_match_rules(rule.get("lineage", []))
-        weight = rule.get("order", 500) - 500
-        driver.rules.ordering.append(
-            OrderingRule(match_rules=match_rules, weight=weight),
-        )
+    options: dict[str, Any],
+) -> dict[str, tuple[Any, ...]]:
+    """Process rules that require custom handling. Returns a dict of rule tuples."""
+    result: dict[str, tuple[Any, ...]] = {}
 
-    for rule in v2_options.get("indent_adjust", ()):
-        driver.rules.indent_adjust.append(
-            IndentAdjustRule(
-                start_expression=rule.get("start_expression"),
-                end_expression=rule.get("end_expression"),
-            )
+    ordering = tuple(
+        OrderingRule(
+            match_rules=_collect_match_rules(rule.get("lineage", [])),
+            weight=rule.get("order", 500) - 500,
         )
+        for rule in options.get("ordering", ())
+    )
+    if ordering:
+        result["ordering"] = ordering
 
-    for rule in v2_options.get("sectional_exiting", ()):
-        match_rules = _collect_match_rules(rule.get("lineage", []))
-        driver.rules.sectional_exiting.append(
-            SectionalExitingRule(
-                match_rules=match_rules, exit_text=rule.get("exit_text", "")
-            ),
+    indent_adjust = tuple(
+        IndentAdjustRule(
+            start_expression=rule.get("start_expression"),
+            end_expression=rule.get("end_expression"),
         )
+        for rule in options.get("indent_adjust", ())
+    )
+    if indent_adjust:
+        result["indent_adjust"] = indent_adjust
 
-    for rule in v2_options.get("full_text_sub", ()):
-        driver.rules.full_text_sub.append(
-            FullTextSubRule(
-                search=rule.get("search", ""), replace=rule.get("replace", "")
-            )
+    sectional_exiting = tuple(
+        SectionalExitingRule(
+            match_rules=_collect_match_rules(rule.get("lineage", [])),
+            exit_text=rule.get("exit_text", ""),
         )
+        for rule in options.get("sectional_exiting", ())
+    )
+    if sectional_exiting:
+        result["sectional_exiting"] = sectional_exiting
 
-    for rule in v2_options.get("per_line_sub", ()):
-        driver.rules.per_line_sub.append(
-            PerLineSubRule(
-                search=rule.get("search", ""), replace=rule.get("replace", "")
-            )
-        )
+    full_text_sub = tuple(
+        FullTextSubRule(search=rule.get("search", ""), replace=rule.get("replace", ""))
+        for rule in options.get("full_text_sub", ())
+    )
+    if full_text_sub:
+        result["full_text_sub"] = full_text_sub
 
-    for rule in v2_options.get("negation_negate_with", ()):
-        match_rules = _collect_match_rules(rule.get("lineage", []))
-        driver.rules.negate_with.append(
-            NegationDefaultWithRule(match_rules=match_rules, use=rule.get("use", "")),
+    per_line_sub = tuple(
+        PerLineSubRule(search=rule.get("search", ""), replace=rule.get("replace", ""))
+        for rule in options.get("per_line_sub", ())
+    )
+    if per_line_sub:
+        result["per_line_sub"] = per_line_sub
+
+    negate_with = tuple(
+        NegationDefaultWithRule(
+            match_rules=_collect_match_rules(rule.get("lineage", [])),
+            use=rule.get("use", ""),
         )
+        for rule in options.get("negation_negate_with", ())
+    )
+    if negate_with:
+        result["negate_with"] = negate_with
+
+    return result
 
 
 def load_hconfig_v2_options(
@@ -207,48 +230,154 @@ def load_hconfig_v2_options(
         msg = "v2_options must be a dictionary or a valid file path."
         raise TypeError(msg)
 
-    driver = get_hconfig_driver(platform)
+    return load_driver_options(v2_options, platform)
 
-    # Process simple rules that only need match_rules
-    simple_rules: tuple[tuple[str, type[Any], Callable[[Any], None]], ...] = (
-        (
-            "sectional_overwrite",
-            SectionalOverwriteRule,
-            driver.rules.sectional_overwrite.append,
-        ),
-        (
-            "sectional_overwrite_no_negate",
-            SectionalOverwriteNoNegateRule,
-            driver.rules.sectional_overwrite_no_negate.append,
-        ),
-        (
-            "parent_allows_duplicate_child",
-            ParentAllowsDuplicateChildRule,
-            driver.rules.parent_allows_duplicate_child.append,
-        ),
-        (
-            "idempotent_commands_blacklist",
-            IdempotentCommandsAvoidRule,
-            driver.rules.idempotent_commands_avoid.append,
-        ),
-        (
-            "idempotent_commands",
-            IdempotentCommandsRule,
-            driver.rules.idempotent_commands.append,
-        ),
-        (
-            "negation_default_when",
-            NegationDefaultWhenRule,
-            driver.rules.negation_default_when.append,
-        ),
+
+def load_driver_options(
+    options: dict[str, Any] | str, platform_or_driver: Platform | HConfigDriverBase
+) -> HConfigDriverBase:
+    """Load driver options from a dictionary or YAML file and merge them
+    into a platform driver.
+
+    This is the generic version of load_hconfig_v2_options that works with
+    any options dictionary format. It creates a driver for the given platform,
+    then extends its rules with the provided options.
+
+    Args:
+        options: Either a dictionary containing options or a file path
+            to a YAML file containing the options.
+        platform_or_driver: The Platform enum or an existing driver instance.
+
+    Returns:
+        HConfigDriverBase: A driver instance with the merged rules.
+
+    """
+    if isinstance(options, str):
+        options = yaml.safe_load(read_text_from_file(file_path=options))
+
+    if not isinstance(options, dict):
+        msg = "options must be a dictionary or a valid file path."
+        raise TypeError(msg)
+
+    driver = (
+        get_hconfig_driver(platform_or_driver)
+        if isinstance(platform_or_driver, Platform)
+        else platform_or_driver
     )
-    for key, rule_class, append_to in simple_rules:
-        _process_simple_rules(v2_options, key, rule_class, append_to)
 
-    # Process rules that require custom handling
-    _process_custom_rules(v2_options, driver)
+    # Collect simple rules
+    simple_rules_config: dict[str, tuple[Any, ...]] = {}
+
+    simple_mapping: tuple[tuple[str, type[Any]], ...] = (
+        ("sectional_overwrite", SectionalOverwriteRule),
+        ("sectional_overwrite_no_negate", SectionalOverwriteNoNegateRule),
+        ("parent_allows_duplicate_child", ParentAllowsDuplicateChildRule),
+        ("idempotent_commands_blacklist", IdempotentCommandsAvoidRule),
+        ("idempotent_commands_avoid", IdempotentCommandsAvoidRule),
+        ("idempotent_commands", IdempotentCommandsRule),
+        ("negation_default_when", NegationDefaultWhenRule),
+    )
+
+    for key, rule_class in simple_mapping:
+        new_rules = _process_simple_rules(options, key, rule_class)
+        if new_rules:
+            # Map blacklist key to the correct field name
+            field_name = (
+                "idempotent_commands_avoid"
+                if key == "idempotent_commands_blacklist"
+                else key
+            )
+            simple_rules_config[field_name] = new_rules
+
+    # Collect custom rules
+    custom_rules = _process_custom_rules(options)
+
+    # Merge all new rules with existing driver rules
+    all_new_rules = {**simple_rules_config, **custom_rules}
+
+    if all_new_rules:
+        driver.rules = _merge_rules(driver.rules, all_new_rules)
 
     return driver
+
+
+_FIELD_TO_GROUP: dict[str, str | None] = {
+    # SectionalRules
+    "sectional_exiting": "sectional",
+    "sectional_overwrite": "sectional",
+    "sectional_overwrite_no_negate": "sectional",
+    # ParsingRules
+    "full_text_sub": "parsing",
+    "per_line_sub": "parsing",
+    "indent_adjust": "parsing",
+    # NegationRules
+    "negate_with": "negation",
+    "negation_default_when": "negation",
+    # IdempotencyRules
+    "idempotent_commands": "idempotency",
+    "idempotent_commands_avoid": "idempotency",
+    # Flat on HConfigDriverRules
+    "ordering": None,
+    "parent_allows_duplicate_child": None,
+}
+
+_GROUP_CLASSES: dict[str, type[Any]] = {
+    "sectional": SectionalRules,
+    "parsing": ParsingRules,
+    "negation": NegationRules,
+    "idempotency": IdempotencyRules,
+}
+
+
+def _merge_rules(
+    existing: HConfigDriverRules, new_rules: dict[str, tuple[Any, ...]]
+) -> HConfigDriverRules:
+    """Merge new rule tuples into an existing HConfigDriverRules, respecting grouped structure."""
+    # Collect updates grouped by sub-model
+    group_updates: dict[str, dict[str, tuple[Any, ...]]] = {}
+    flat_updates: dict[str, tuple[Any, ...]] = {}
+
+    for field_name, rules in new_rules.items():
+        group = _FIELD_TO_GROUP.get(field_name)
+        if group is None:
+            existing_val = getattr(existing, field_name, ())
+            flat_updates[field_name] = (*existing_val, *rules)
+        else:
+            group_updates.setdefault(group, {})[field_name] = rules
+
+    # Build updated sub-models
+    sub_model_updates: dict[str, Any] = {}
+    for group_name, fields in group_updates.items():
+        sub_model = getattr(existing, group_name)
+        merged: dict[str, Any] = {}
+        for field_name, new_vals in fields.items():
+            existing_val = getattr(sub_model, field_name, ())
+            merged[field_name] = (*existing_val, *new_vals)
+        group_cls = _GROUP_CLASSES[group_name]
+        # Preserve existing fields not being updated.
+        # model_dump() cannot serialize callable fields (e.g. post_load_callbacks),
+        # so we restore them from the original sub-model when present.
+        existing_data = {
+            k: v for k, v in sub_model.model_dump().items() if k not in merged
+        }
+        if group_name == "parsing" and "post_load_callbacks" not in merged:
+            existing_data["post_load_callbacks"] = sub_model.post_load_callbacks
+        sub_model_updates[group_name] = group_cls(**existing_data, **merged)
+
+    # Build final HConfigDriverRules
+    result_kwargs: dict[str, Any] = {
+        "parsing": sub_model_updates.get("parsing", existing.parsing),
+        "negation": sub_model_updates.get("negation", existing.negation),
+        "idempotency": sub_model_updates.get("idempotency", existing.idempotency),
+        "sectional": sub_model_updates.get("sectional", existing.sectional),
+        "ordering": flat_updates.get("ordering", existing.ordering),
+        "parent_allows_duplicate_child": flat_updates.get(
+            "parent_allows_duplicate_child", existing.parent_allows_duplicate_child
+        ),
+        "remediation_transform_callbacks": existing.remediation_transform_callbacks,
+    }
+
+    return HConfigDriverRules(**result_kwargs)
 
 
 def load_hconfig_v2_options_from_file(

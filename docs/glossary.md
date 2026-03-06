@@ -55,7 +55,7 @@ A pair of `IndentAdjustRule` entries (`start_expression` / `end_expression`) tha
 
 ## Match rule
 
-A `MatchRule` Pydantic model that acts as a predicate on an `HConfigChild.text` value.  All fields (`equals`, `startswith`, `endswith`, `contains`, `re_search`) are optional; when multiple are set every criterion must match.  Match rules are composed into tuples to describe a full lineage path.
+A `MatchRule` Pydantic model that acts as a predicate on an `HConfig.text` value.  All fields (`equals`, `startswith`, `endswith`, `contains`, `re_search`) are optional; when multiple are set every criterion must match.  Match rules are composed into tuples to describe a full lineage path.
 
 **Example:** Match any `neighbor X.X.X.X description` line under a BGP section:
 
@@ -92,7 +92,7 @@ A `NegationDefaultWithRule` that replaces the standard negation with a fixed com
 
 ## Parent allows duplicate child
 
-A `ParentAllowsDuplicateChildRule` that permits multiple `HConfigChild` objects with the same `text` value under a single parent.  Required for constructs such as `address-family` blocks inside `router bgp` on some platforms, or `endif` tokens in IOS XR route-policies.
+A `ParentAllowsDuplicateChildRule` that permits multiple `HConfig` child objects with the same `text` value under a single parent.  Required for constructs such as `address-family` blocks inside `router bgp` on some platforms, or `endif` tokens in IOS XR route-policies.
 
 ---
 
@@ -138,7 +138,7 @@ A `SectionalOverwriteNoNegateRule` similar to sectional overwrite, but the exist
 
 ## Tag rules
 
-`TagRule` entries that apply a named tag (`apply_tags`) to all `HConfigChild` nodes whose lineage matches `match_rules`.  Tags are used by `WorkflowRemediation.apply_remediation_tag_rules()` to annotate the remediation config for selective filtering via `remediation_config_filtered_text()`.
+`TagRule` entries that apply a named tag (`apply_tags`) to all `HConfig` child nodes whose lineage matches `match_rules`.  Tags are used by `WorkflowRemediation.apply_remediation_tag_rules()` to annotate the remediation config for selective filtering via `remediation_config_filtered_text()`.
 
 **Example use case:** Tag all interface changes as `"interfaces"` and all BGP changes as `"bgp"` so that changes can be deployed separately.
 

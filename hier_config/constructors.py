@@ -6,7 +6,6 @@ from re import search, sub
 
 from hier_config.platforms.driver_base import HConfigDriverBase
 
-from .child import HConfigChild
 from .models import Dump, Platform
 from .platforms.arista_eos.driver import HConfigDriverAristaEOS
 from .platforms.arista_eos.view import HConfigViewAristaEOS
@@ -52,25 +51,27 @@ def get_hconfig_driver(platform: Platform) -> HConfigDriverBase:
     return driver_cls()
 
 
+_driver_view_mapping: dict[type[HConfigDriverBase], type[HConfigViewBase]] = {
+    HConfigDriverAristaEOS: HConfigViewAristaEOS,
+    HConfigDriverCiscoIOS: HConfigViewCiscoIOS,
+    HConfigDriverCiscoNXOS: HConfigViewCiscoNXOS,
+    HConfigDriverCiscoIOSXR: HConfigViewCiscoIOSXR,
+    HConfigDriverHPProcurve: HConfigViewHPProcurve,
+}
+
+
 def get_hconfig_view(config: HConfig) -> HConfigViewBase:
     """Instantiates the appropriate HConfigView.
 
     If you implement your own HConfigView, you will likely need to create a function like this one locally.
     """
-    driver = config.driver
-    if isinstance(driver, HConfigDriverAristaEOS):
-        return HConfigViewAristaEOS(config)
-    if isinstance(driver, HConfigDriverCiscoIOS):
-        return HConfigViewCiscoIOS(config)
-    if isinstance(driver, HConfigDriverCiscoNXOS):
-        return HConfigViewCiscoNXOS(config)
-    if isinstance(driver, HConfigDriverCiscoIOSXR):
-        return HConfigViewCiscoIOSXR(config)
-    if isinstance(driver, HConfigDriverHPProcurve):
-        return HConfigViewHPProcurve(config)
+    view_cls = _driver_view_mapping.get(type(config.driver))
 
-    message = f"Unsupported platform: {config.driver.__class__.__name__}"
-    raise ValueError(message)
+    if view_cls is None:
+        message = f"Unsupported platform: {config.driver.__class__.__name__}"
+        raise ValueError(message)
+
+    return view_cls(config)
 
 
 def get_hconfig(
@@ -81,7 +82,7 @@ def get_hconfig(
         config_raw = config_raw.read_text(encoding="utf8")
 
     config = HConfig(_get_driver(platform_or_driver))
-    for rule in config.driver.rules.full_text_sub:
+    for rule in config.driver.rules.parsing.full_text_sub:
         config_raw = sub(rule.search, rule.replace, config_raw)
 
     _load_from_string_lines(config, config_raw)
@@ -89,7 +90,7 @@ def get_hconfig(
     for child in tuple(config.all_children()):
         child.delete_sectional_exit()
 
-    for callback in config.driver.rules.post_load_callbacks:
+    for callback in config.driver.rules.parsing.post_load_callbacks:
         callback(config)
 
     return config
@@ -100,13 +101,16 @@ def get_hconfig_from_dump(
 ) -> HConfig:
     """Load an HConfig dump."""
     config = get_hconfig(_get_driver(platform_or_driver))
-    last_item: HConfig | HConfigChild = config
+    last_item: HConfig = config
     for item in dump.lines:
         # parent is the root
         if item.depth == 1:
-            parent: HConfig | HConfigChild = config
+            parent: HConfig = config
         # has the same parent
         elif last_item.depth() == item.depth:
+            if last_item.parent is None:  # pragma: no cover
+                message = "last_item has no parent"
+                raise TypeError(message)
             parent = last_item.parent
         # is a child object
         elif last_item.depth() + 1 == item.depth:
@@ -138,8 +142,8 @@ def get_hconfig_fast_load(
     if isinstance(lines, str):
         lines = lines.splitlines()
 
-    current_section: HConfig | HConfigChild = config
-    most_recent_item: HConfig | HConfigChild = current_section
+    current_section: HConfig = config
+    most_recent_item: HConfig = current_section
 
     for original_line in lines:
         if not (line_lstripped := original_line.lstrip()):
@@ -147,7 +151,7 @@ def get_hconfig_fast_load(
 
         # Apply per_line_sub rules before processing
         processed_line = original_line
-        for rule in driver.rules.per_line_sub:
+        for rule in driver.rules.parsing.per_line_sub:
             processed_line = sub(rule.search, rule.replace, processed_line)
 
         if not (line_lstripped := processed_line.lstrip()):
@@ -177,13 +181,15 @@ def _get_driver(
 
 
 def _analyze_indent(
-    most_recent_item: HConfig | HConfigChild,
-    current_section: HConfig | HConfigChild,
+    most_recent_item: HConfig,
+    current_section: HConfig,
     indent: int,
     line: str,
-) -> tuple[HConfigChild, HConfig | HConfigChild]:
+) -> tuple[HConfig, HConfig]:
     # Walks back up the tree
     while indent <= current_section.real_indent_level:
+        if current_section.parent is None:  # pragma: no cover
+            break
         current_section = current_section.parent
 
     # Walks down the tree by one step
@@ -202,7 +208,7 @@ def _adjust_indent(
     indent_adjust: int,
     end_indent_adjust: list[str],
 ) -> tuple[int, list[str]]:
-    for expression in options.rules.indent_adjust:
+    for expression in options.rules.parsing.indent_adjust:
         if search(expression.start_expression, line):
             return indent_adjust + 1, [*end_indent_adjust, expression.end_expression]
     return indent_adjust, end_indent_adjust
@@ -222,8 +228,8 @@ def _config_from_string_lines_end_of_banner_test(
 
 def _load_from_string_lines(config: HConfig, config_text: str) -> None:  # noqa: C901
     config_text = config.driver.config_preprocessor(config_text)
-    current_section: HConfig | HConfigChild = config
-    most_recent_item: HConfig | HConfigChild = current_section
+    current_section: HConfig = config
+    most_recent_item: HConfig = current_section
     indent_adjust = 0
     end_indent_adjust: list[str] = []
     temp_banner: list[str] = []
@@ -270,7 +276,7 @@ def _load_from_string_lines(config: HConfig, config_text: str) -> None:  # noqa:
 
         actual_indent = len(line) - len(line.lstrip())
         line = " " * actual_indent + " ".join(line.split())  # noqa: PLW2901
-        for rule in config.driver.rules.per_line_sub:
+        for rule in config.driver.rules.parsing.per_line_sub:
             line = sub(rule.search, rule.replace, line)  # noqa: PLW2901
         line = line.rstrip()  # noqa: PLW2901
 

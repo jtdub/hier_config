@@ -38,13 +38,13 @@ class WorkflowRemediation:
         remediation_config = workflow.remediation_config
         print("Remediation configuration:")
         for line in remediation_config.all_children_sorted():
-            print(line.cisco_style_text())
+            print(line.render())
 
         # Generate the rollback configuration to revert back to the running configuration
         rollback_config = workflow.rollback_config
         print("Rollback configuration:")
         for line in rollback_config.all_children_sorted():
-            print(line.cisco_style_text())
+            print(line.render())
         ```
 
     """
@@ -82,6 +82,10 @@ class WorkflowRemediation:
         remediation_config = self.running_config.config_to_get_to(
             self.generated_config
         ).set_order_weight()
+
+        # Apply driver-specific remediation transforms (Issue #180)
+        for callback in remediation_config.driver.rules.remediation_transform_callbacks:
+            callback(remediation_config)
 
         self._remediation_config = remediation_config
 
@@ -153,4 +157,4 @@ class WorkflowRemediation:
             if include_tags or exclude_tags
             else self.remediation_config.all_children_sorted()
         )
-        return "\n".join(c.cisco_style_text() for c in children)
+        return "\n".join(c.render() for c in children)

@@ -25,7 +25,7 @@ The framework uses a combination of abstract base classes (e.g., `ConfigViewInte
 | `interface_names_mentioned` | `frozenset[str]`              | Set of all interface names mentioned.                                       |
 | `interface_view_by_name`    | `Callable`                    | Returns view of a specific interface by name.                               |
 | `interface_views`           | `Iterable`                    | Yields all interface views.                                                 |
-| `interfaces`                | `Iterable[HConfigChild]`      | Yields raw configuration objects for all interfaces.                        |
+| `interfaces`                | `Iterable[HConfig]`      | Yields raw configuration objects for all interfaces.                        |
 | `interfaces_names`          | `Iterable[str]`               | Yields the names of all interfaces.                                         |
 | `ipv4_default_gw`           | `Optional[IPv4Address]`       | Retrieves the IPv4 default gateway.                                         |
 | `location`                  | `str`                         | Returns the SNMP location.                                                  |
@@ -240,3 +240,11 @@ IP Address: None
 Is Subinterface: False
 ----------------------------------------
 ```
+
+---
+
+## See Also
+
+- [Getting Started](getting-started.md) — creating HConfig objects to use with views
+- [Drivers](drivers.md) — platform-specific drivers that config views depend on
+- [API Reference](api-reference.md) — auto-generated class documentation

@@ -2,7 +2,6 @@ from collections.abc import Iterable
 from ipaddress import AddressValueError, IPv4Address, IPv4Interface
 from re import sub
 
-from hier_config.child import HConfigChild
 from hier_config.platforms.functions import expand_range
 from hier_config.platforms.models import (
     InterfaceDot1qMode,
@@ -15,6 +14,7 @@ from hier_config.platforms.view_base import (
     ConfigViewInterfaceBase,
     HConfigViewBase,
 )
+from hier_config.root import HConfig
 
 
 class ConfigViewInterfaceCiscoIOS(ConfigViewInterfaceBase):  # noqa: PLR0904
@@ -260,7 +260,7 @@ class HConfigViewCiscoIOS(HConfigViewBase):
             yield ConfigViewInterfaceCiscoIOS(interface)
 
     @property
-    def interfaces(self) -> Iterable[HConfigChild]:
+    def interfaces(self) -> Iterable[HConfig]:
         return self.config.get_children(startswith="interface ")
 
     @property

@@ -1,14 +1,14 @@
 [tool.poetry]
 name = "hier-config"
-version = "3.4.1"
+version = "4.0.0a1"
 description = "A network configuration query and comparison library, used to build remediation configurations."
 packages = [
     { include="hier_config", from="."},
 ]
 authors = [
     "Andrew Edwards <edwards.andrew@heb.com>",
-    "James Williams <james.williams@networktocode.com",
-    "Jan Brooks <jan.brooks@rackspace.com"
+    "James Williams <james.williams@networktocode.com>",
+    "Jan Brooks <jan.brooks@rackspace.com>"
 ]
 license = "MIT"
 classifiers = [
@@ -73,7 +73,6 @@ load-plugins = [
     "pylint.extensions.eq_without_hash",
     "pylint.extensions.for_any_all",
     "pylint.extensions.overlapping_exceptions",
-    "pylint.extensions.overlapping_exceptions",
     "pylint.extensions.redefined_loop_name",
     "pylint.extensions.set_membership",
     "pylint.extensions.typing",
@@ -81,6 +80,7 @@ load-plugins = [
 ]
 disable = [
     "consider-alternative-union-syntax",
+    "cyclic-import",  # Deferred imports in classmethods are safe
     "duplicate-code",  # Enable this at some point in the future
     "fixme",  # Covered by ruff FIX002
     "import-outside-toplevel", # Covered by ruff PLC0415
@@ -91,8 +91,8 @@ disable = [
     "redefined-loop-name",  # Covered by ruff PLW2901
     "too-many-arguments",  # Covered by ruff PLR0913
     "too-many-return-statements",  # Covered by ruff PLR0911
-    "too-many-locals",  # Coverred by ruff PLR0914
-    "too-many-public-methods",  # Coverred by ruff PLR0904
+    "too-many-locals",  # Covered by ruff PLR0914
+    "too-many-public-methods",  # Covered by ruff PLR0904
 ]
 
 

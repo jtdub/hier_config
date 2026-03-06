@@ -116,13 +116,18 @@ def test_load_hconfig_v2_options(
     driver = load_hconfig_v2_options(v2_options, platform)
 
     # Assert sectional overwrite
-    assert len(driver.rules.sectional_overwrite) == 1
-    assert driver.rules.sectional_overwrite[0].match_rules[0].startswith == "template"
+    assert len(driver.rules.sectional.sectional_overwrite) == 1
+    assert (
+        driver.rules.sectional.sectional_overwrite[0].match_rules[0].startswith
+        == "template"
+    )
 
     # Assert sectional overwrite no negate
-    assert len(driver.rules.sectional_overwrite_no_negate) == 1
+    assert len(driver.rules.sectional.sectional_overwrite_no_negate) == 1
     assert (
-        driver.rules.sectional_overwrite_no_negate[0].match_rules[0].startswith
+        driver.rules.sectional.sectional_overwrite_no_negate[0]
+        .match_rules[0]
+        .startswith
         == "as-path-set"
     )
 
@@ -132,9 +137,9 @@ def test_load_hconfig_v2_options(
     assert driver.rules.ordering[0].weight == 200
 
     # Assert indent adjust
-    assert len(driver.rules.indent_adjust) == 1
-    assert driver.rules.indent_adjust[0].start_expression == "^\\s*template"
-    assert driver.rules.indent_adjust[0].end_expression == "^\\s*end-template"
+    assert len(driver.rules.parsing.indent_adjust) == 1
+    assert driver.rules.parsing.indent_adjust[0].start_expression == "^\\s*template"
+    assert driver.rules.parsing.indent_adjust[0].end_expression == "^\\s*end-template"
 
     # Assert parent_allows_duplicate_child
     assert len(driver.rules.parent_allows_duplicate_child) == 1
@@ -144,43 +149,52 @@ def test_load_hconfig_v2_options(
     )
 
     # Assert sectional exiting
-    assert len(driver.rules.sectional_exiting) == 1
-    assert driver.rules.sectional_exiting[0].match_rules[0].startswith == "router bgp"
-    assert driver.rules.sectional_exiting[0].exit_text == "exit"
+    assert len(driver.rules.sectional.sectional_exiting) == 1
+    assert (
+        driver.rules.sectional.sectional_exiting[0].match_rules[0].startswith
+        == "router bgp"
+    )
+    assert driver.rules.sectional.sectional_exiting[0].exit_text == "exit"
 
     # Assert per-line substitution
-    assert len(driver.rules.per_line_sub) == 1
-    assert driver.rules.per_line_sub[0].search == "^!.*Generated.*$"
-    assert not driver.rules.per_line_sub[0].replace
+    assert len(driver.rules.parsing.per_line_sub) == 1
+    assert driver.rules.parsing.per_line_sub[0].search == "^!.*Generated.*$"
+    assert not driver.rules.parsing.per_line_sub[0].replace
 
     # Assert full-text substitution
-    assert len(driver.rules.full_text_sub) == 1
-    assert driver.rules.full_text_sub[0].search == "banner motd # replace me #"
-    assert not driver.rules.full_text_sub[0].replace
+    assert len(driver.rules.parsing.full_text_sub) == 1
+    assert driver.rules.parsing.full_text_sub[0].search == "banner motd # replace me #"
+    assert not driver.rules.parsing.full_text_sub[0].replace
 
     # Assert idempotent commands avoid (blacklist)
-    assert len(driver.rules.idempotent_commands_avoid) == 1
+    assert len(driver.rules.idempotency.idempotent_commands_avoid) == 1
     assert (
-        driver.rules.idempotent_commands_avoid[0].match_rules[0].startswith
+        driver.rules.idempotency.idempotent_commands_avoid[0].match_rules[0].startswith
         == "interface"
     )
     assert (
-        driver.rules.idempotent_commands_avoid[0].match_rules[1].re_search
+        driver.rules.idempotency.idempotent_commands_avoid[0].match_rules[1].re_search
         == "ip address.*secondary"
     )
 
     # Assert idempotent commands
-    assert len(driver.rules.idempotent_commands) == 1
-    assert driver.rules.idempotent_commands[0].match_rules[0].startswith == "interface"
+    assert len(driver.rules.idempotency.idempotent_commands) == 1
+    assert (
+        driver.rules.idempotency.idempotent_commands[0].match_rules[0].startswith
+        == "interface"
+    )
 
     # Assert negation_negate_with -> negate_with
-    assert len(driver.rules.negate_with) == 1
-    assert driver.rules.negate_with[0].match_rules[0].startswith == "interface Ethernet"
+    assert len(driver.rules.negation.negate_with) == 1
     assert (
-        driver.rules.negate_with[0].match_rules[1].startswith
+        driver.rules.negation.negate_with[0].match_rules[0].startswith
+        == "interface Ethernet"
+    )
+    assert (
+        driver.rules.negation.negate_with[0].match_rules[1].startswith
         == "spanning-tree port type"
     )
-    assert driver.rules.negate_with[0].use == "no spanning-tree port type"
+    assert driver.rules.negation.negate_with[0].use == "no spanning-tree port type"
 
 
 def test_load_hconfig_v2_tags_valid_input() -> None:
@@ -287,12 +301,15 @@ indent_adjust:
     assert driver.rules.ordering[0].match_rules[0].startswith == "ntp"
     assert driver.rules.ordering[0].weight == 200
 
-    assert len(driver.rules.sectional_overwrite) == 1
-    assert driver.rules.sectional_overwrite[0].match_rules[0].startswith == "template"
+    assert len(driver.rules.sectional.sectional_overwrite) == 1
+    assert (
+        driver.rules.sectional.sectional_overwrite[0].match_rules[0].startswith
+        == "template"
+    )
 
-    assert len(driver.rules.indent_adjust) == 1
-    assert driver.rules.indent_adjust[0].start_expression == "start expression"
-    assert driver.rules.indent_adjust[0].end_expression == "end expression"
+    assert len(driver.rules.parsing.indent_adjust) == 1
+    assert driver.rules.parsing.indent_adjust[0].start_expression == "start expression"
+    assert driver.rules.parsing.indent_adjust[0].end_expression == "end expression"
 
 
 def test_load_hconfig_v2_options_from_file_invalid_yaml(tmp_path: Path) -> None:

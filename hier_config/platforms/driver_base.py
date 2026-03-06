@@ -2,9 +2,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from re import Match, search
 
-from pydantic import Field, PositiveInt
+from pydantic import PositiveInt
 
-from hier_config.child import HConfigChild
 from hier_config.models import (
     BaseModel,
     FullTextSubRule,
@@ -24,108 +23,53 @@ from hier_config.models import (
 from hier_config.root import HConfig
 
 
-def _full_text_sub_rules_default() -> list[FullTextSubRule]:
-    return []
+class ParsingRules(BaseModel):
+    """Rules governing config text parsing and post-load normalisation."""
+
+    full_text_sub: tuple[FullTextSubRule, ...] = ()
+    per_line_sub: tuple[PerLineSubRule, ...] = ()
+    indent_adjust: tuple[IndentAdjustRule, ...] = ()
+    indentation: PositiveInt = 2
+    post_load_callbacks: tuple[Callable[..., None], ...] = ()
 
 
-def _idempotent_commands_rules_default() -> list[IdempotentCommandsRule]:
-    return []
+class NegationRules(BaseModel):
+    """Rules controlling how commands are negated during remediation."""
+
+    negate_with: tuple[NegationDefaultWithRule, ...] = ()
+    negation_default_when: tuple[NegationDefaultWhenRule, ...] = ()
 
 
-def _idempotent_commands_avoid_rules_default() -> list[IdempotentCommandsAvoidRule]:
-    return []
+class IdempotencyRules(BaseModel):
+    """Rules declaring idempotent command families (last value wins)."""
+
+    idempotent_commands: tuple[IdempotentCommandsRule, ...] = ()
+    idempotent_commands_avoid: tuple[IdempotentCommandsAvoidRule, ...] = ()
 
 
-def _indent_adjust_rules_default() -> list[IndentAdjustRule]:
-    return []
+class SectionalRules(BaseModel):
+    """Rules for hierarchical section exit commands and overwrite semantics."""
+
+    sectional_exiting: tuple[SectionalExitingRule, ...] = ()
+    sectional_overwrite: tuple[SectionalOverwriteRule, ...] = ()
+    sectional_overwrite_no_negate: tuple[SectionalOverwriteNoNegateRule, ...] = ()
 
 
-def _negation_default_when_rules_default() -> list[NegationDefaultWhenRule]:
-    return []
-
-
-def _negate_with_rules_default() -> list[NegationDefaultWithRule]:
-    return []
-
-
-def _ordering_rules_default() -> list[OrderingRule]:
-    return []
-
-
-def _parent_allows_duplicate_child_rules_default() -> list[
-    ParentAllowsDuplicateChildRule
-]:
-    return []
-
-
-def _per_line_sub_rules_default() -> list[PerLineSubRule]:
-    return []
-
-
-def _post_load_callbacks_default() -> list[Callable[[HConfig], None]]:
-    return []
-
-
-def _sectional_exiting_rules_default() -> list[SectionalExitingRule]:
-    return []
-
-
-def _sectional_overwrite_rules_default() -> list[SectionalOverwriteRule]:
-    return []
-
-
-def _sectional_overwrite_no_negate_rules_default() -> list[
-    SectionalOverwriteNoNegateRule
-]:
-    return []
-
-
-class HConfigDriverRules(BaseModel):  # pylint: disable=too-many-instance-attributes
+class HConfigDriverRules(BaseModel):
     """Pydantic model holding all rule collections for a platform driver.
 
-    Each field corresponds to one category of driver behaviour (e.g. negation,
-    ordering, idempotency).  Instantiated by each driver's ``_instantiate_rules``
-    static method and stored on :class:`HConfigDriverBase`.
+    Rules are grouped by category into sub-models for clarity.  Fields that
+    don't naturally group (ordering, duplicate-child, remediation callbacks)
+    remain at the top level.
     """
 
-    full_text_sub: list[FullTextSubRule] = Field(
-        default_factory=_full_text_sub_rules_default
-    )
-    idempotent_commands: list[IdempotentCommandsRule] = Field(
-        default_factory=_idempotent_commands_rules_default
-    )
-    idempotent_commands_avoid: list[IdempotentCommandsAvoidRule] = Field(
-        default_factory=_idempotent_commands_avoid_rules_default
-    )
-    indent_adjust: list[IndentAdjustRule] = Field(
-        default_factory=_indent_adjust_rules_default
-    )
-    indentation: PositiveInt = 2
-    negation_default_when: list[NegationDefaultWhenRule] = Field(
-        default_factory=_negation_default_when_rules_default
-    )
-    negate_with: list[NegationDefaultWithRule] = Field(
-        default_factory=_negate_with_rules_default
-    )
-    ordering: list[OrderingRule] = Field(default_factory=_ordering_rules_default)
-    parent_allows_duplicate_child: list[ParentAllowsDuplicateChildRule] = Field(
-        default_factory=_parent_allows_duplicate_child_rules_default
-    )
-    per_line_sub: list[PerLineSubRule] = Field(
-        default_factory=_per_line_sub_rules_default
-    )
-    post_load_callbacks: list[Callable[[HConfig], None]] = Field(
-        default_factory=_post_load_callbacks_default
-    )
-    sectional_exiting: list[SectionalExitingRule] = Field(
-        default_factory=_sectional_exiting_rules_default
-    )
-    sectional_overwrite: list[SectionalOverwriteRule] = Field(
-        default_factory=_sectional_overwrite_rules_default
-    )
-    sectional_overwrite_no_negate: list[SectionalOverwriteNoNegateRule] = Field(
-        default_factory=_sectional_overwrite_no_negate_rules_default
-    )
+    parsing: ParsingRules = ParsingRules()
+    negation: NegationRules = NegationRules()
+    idempotency: IdempotencyRules = IdempotencyRules()
+    sectional: SectionalRules = SectionalRules()
+    ordering: tuple[OrderingRule, ...] = ()
+    parent_allows_duplicate_child: tuple[ParentAllowsDuplicateChildRule, ...] = ()
+    remediation_transform_callbacks: tuple[Callable[..., None], ...] = ()
 
 
 class HConfigDriverBase(ABC):
@@ -138,31 +82,53 @@ class HConfigDriverBase(ABC):
 
     def idempotent_for(
         self,
-        config: HConfigChild,
-        other_children: Iterable[HConfigChild],
-    ) -> HConfigChild | None:
-        for rule in self.rules.idempotent_commands:
+        config: HConfig,
+        other_children: Iterable[HConfig],
+    ) -> HConfig | None:
+        for rule in self.rules.idempotency.idempotent_commands:
             if not config.is_lineage_match(rule.match_rules):
                 continue
 
-            config_key = self._idempotency_key(config, rule.match_rules)
+            config_key = self._idempotency_key(
+                config, rule.match_rules, rule.key_extract
+            )
 
             for other_child in other_children:
                 if not other_child.is_lineage_match(rule.match_rules):
                     continue
 
-                if self._idempotency_key(other_child, rule.match_rules) == config_key:
+                if (
+                    self._idempotency_key(
+                        other_child, rule.match_rules, rule.key_extract
+                    )
+                    == config_key
+                ):
                     return other_child
 
         return None
 
-    def negate_with(self, config: HConfigChild) -> str | None:
-        for with_rule in self.rules.negate_with:
+    def negate_child(self, child: HConfig) -> HConfig:
+        """Negate a child using the three-step driver cascade.
+
+        1. Check ``negate_with`` rules for a fixed replacement command.
+        2. Check ``negation_default_when`` rules for the ``default`` form.
+        3. Fall back to ``swap_negation`` (toggle the negation prefix).
+        """
+        if negate_with := self.negate_with(child):
+            child.text = negate_with
+            return child
+        if self._use_default_for_negation(child):
+            child.text = f"default {child.text_without_negation}"
+            return child
+        return self.swap_negation(child)
+
+    def negate_with(self, config: HConfig) -> str | None:
+        for with_rule in self.rules.negation.negate_with:
             if config.is_lineage_match(with_rule.match_rules):
                 return with_rule.use
         return None
 
-    def swap_negation(self, child: HConfigChild) -> HConfigChild:
+    def swap_negation(self, child: HConfig) -> HConfig:
         """Swap negation of a `child.text`."""
         if child.text.startswith(self.negation_prefix):
             child.text = child.text_without_negation
@@ -171,16 +137,26 @@ class HConfigDriverBase(ABC):
 
         return child
 
+    def _use_default_for_negation(self, config: HConfig) -> bool:
+        return any(
+            config.is_lineage_match(rule.match_rules)
+            for rule in self.rules.negation.negation_default_when
+        )
+
     def _idempotency_key(
         self,
-        config: HConfigChild,
+        config: HConfig,
         match_rules: tuple[MatchRule, ...],
+        key_extract: str | None = None,
     ) -> tuple[str, ...]:
         """Build a structural identity for `config` that respects driver rules.
 
         Args:
             config: The child being evaluated for idempotency.
             match_rules: The match rules describing the lineage signature.
+            key_extract: Optional regex with a named group ``key`` applied to
+                the leaf (last) lineage component.  When provided, it overrides
+                the heuristic key generation for that component.
 
         Returns:
             A tuple of string fragments representing the idempotency key.
@@ -191,13 +167,20 @@ class HConfigDriverBase(ABC):
             return ()
 
         components: list[str] = []
-        for child, rule in zip(lineage, match_rules, strict=False):
+        last_index = len(lineage) - 1
+        for index, (child, rule) in enumerate(zip(lineage, match_rules, strict=False)):
+            # Apply key_extract only to the leaf component
+            if key_extract is not None and index == last_index:
+                extracted = self._key_from_extract(child.text, key_extract)
+                if extracted is not None:
+                    components.append(extracted)
+                    continue
             components.append(self._idempotency_component_key(child, rule))
         return tuple(components)
 
     def _idempotency_component_key(
         self,
-        child: HConfigChild,
+        child: HConfig,
         rule: MatchRule,
     ) -> str:
         """Derive the structural key for a single lineage component.
@@ -340,6 +323,34 @@ class HConfigDriverBase(ABC):
 
         regex_key = self._normalize_regex_key(pattern, match_source, match)
         return [f"re|{regex_key}"]
+
+    @staticmethod
+    def _key_from_extract(text: str, key_extract: str) -> str | None:
+        """Apply an explicit ``key_extract`` regex to derive the idempotency key.
+
+        The regex must contain a named group ``key``.  If the pattern matches
+        and the group is non-empty, the extracted value is returned as the
+        component key.
+
+        Args:
+            text: The command text to match against.
+            key_extract: Regex pattern with a ``(?P<key>...)`` named group.
+
+        Returns:
+            A key string like ``"extract|<value>"`` on success, or ``None``
+            when the pattern does not match or the group is empty.
+
+        """
+        match = search(key_extract, text)
+        if match is None:
+            return None
+        try:
+            key_value = match.group("key")
+        except IndexError:
+            return None
+        if key_value:
+            return f"extract|{key_value}"
+        return None
 
     @staticmethod
     def _match_prefix(value: str, prefix: str | tuple[str, ...]) -> str | None:

@@ -93,7 +93,7 @@ configuration because their identities differ within the `neighbor` hierarchy.
 >>> print("Running Config")
 Running Config
 >>> for line in running_config.all_children():
-...     print(line.cisco_style_text())
+...     print(line.render())
 ...
 hostname aggr-example.rtr
 ip access-list extended TEST
@@ -116,7 +116,7 @@ interface Vlan3
 >>> print("Remediation Config")
 Remediation Config
 >>> for line in remediation_config.all_children():
-...     print(line.cisco_style_text())
+...     print(line.render())
 ...
 vlan 3
   name switch_mgmt_10.0.3.0/24
@@ -139,7 +139,7 @@ interface Vlan4
 >>> print("Future Config")
 Future Config
 >>> for line in running_config.future(remediation_config).all_children():
-...     print(line.cisco_style_text())
+...     print(line.render())
 ...
 vlan 3
   name switch_mgmt_10.0.3.0/24
@@ -216,3 +216,11 @@ This is useful when comparing configurations from two network devices (such as r
 ```
 
 Lines prefixed with `+` are present in `generated_config` but not in `running_config`; lines prefixed with `-` are present in `running_config` but not in `generated_config`.  Parent lines without a prefix are shown as context only.
+
+---
+
+## See Also
+
+- [Getting Started](getting-started.md) — basic remediation and rollback
+- [Custom Workflows](custom-workflows.md) — advanced remediation patterns
+- [Working with Tags](tags.md) — tag-based filtering of remediation output

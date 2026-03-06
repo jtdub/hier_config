@@ -1,6 +1,6 @@
 # Getting Started with hier_config
 
-Hier Config is a Python library that assists with remediating network configurations by comparing a device's current configuration (running config) with its intended configuration (generated config). Hier Config v3 processes configuration data without connecting to devices, enabling configuration analysis and remediation.
+Hier Config is a Python library that assists with remediating network configurations by comparing a device's running configuration with its intended configuration. Hier Config processes configuration data without connecting to devices, enabling configuration analysis and remediation.
 
 ## Step 1: Import Required Classes
 
@@ -48,7 +48,7 @@ The `remediation_config` attribute generates the configuration needed to apply t
 >>> print("Remediation configuration:")
 Remediation configuration:
 >>> for line in workflow.remediation_config.all_children_sorted():
-...     print(line.cisco_style_text())
+...     print(line.render())
 ...
 vlan 3
   name switch_mgmt_10.0.3.0/24
@@ -79,7 +79,7 @@ Similarly, the `rollback_config` attribute generates a configuration that can re
 >>> print("Rollback configuration:")
 Rollback configuration:
 >>> for line in workflow.rollback_config.all_children_sorted():
-...     print(line.cisco_style_text())
+...     print(line.render())
 ...
 no vlan 4
 no interface Vlan4
@@ -94,3 +94,12 @@ interface Vlan3
   ip address 10.0.4.1 255.255.0.0
 >>>
 ```
+
+---
+
+## See Also
+
+- [Future Config](future-config.md) — predict the device state after applying changes
+- [Working with Tags](tags.md) — filter remediation output by category
+- [Custom Workflows](custom-workflows.md) — handle edge cases like ACL resequencing
+- [Drivers](drivers.md) — platform-specific behavior and customization

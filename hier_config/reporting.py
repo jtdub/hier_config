@@ -13,8 +13,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from hier_config.child import HConfigChild
-from hier_config.models import ChangeDetail, ReportSummary, TagRule
+from hier_config.models import ChangeDetail, ReportSummary, TagRule, TextStyle
 from hier_config.root import HConfig
 
 
@@ -180,7 +179,7 @@ class RemediationReporter:  # noqa: PLR0904
         *,
         include_tags: Iterable[str] = (),
         exclude_tags: Iterable[str] = (),
-    ) -> tuple[HConfigChild, ...]:
+    ) -> tuple[HConfig, ...]:
         """Get all configuration changes, optionally filtered by tags.
 
         Args:
@@ -188,7 +187,7 @@ class RemediationReporter:  # noqa: PLR0904
             exclude_tags: Exclude changes with these tags.
 
         Returns:
-            A tuple of HConfigChild objects representing changes.
+            A tuple of HConfig objects representing changes.
 
         """
         if include_tags or exclude_tags:
@@ -230,14 +229,14 @@ class RemediationReporter:  # noqa: PLR0904
 
     def _build_change_detail(
         self,
-        child: HConfigChild,
+        child: HConfig,
         *,
         tag: str | None = None,
     ) -> ChangeDetail:
-        """Build a ChangeDetail object from an HConfigChild.
+        """Build a ChangeDetail object from an HConfig.
 
         Args:
-            child: The HConfigChild to build details from.
+            child: The HConfig to build details from.
             tag: Optional tag to filter instances.
 
         Returns:
@@ -262,11 +261,10 @@ class RemediationReporter:  # noqa: PLR0904
 
         # Build path
         path_parts: list[str] = []
-        current: HConfigChild | HConfig | None = child
-        while current is not None and hasattr(current, "text"):
-            if isinstance(current, HConfigChild):
-                path_parts.insert(0, current.text)
-            current = getattr(current, "parent", None)
+        current: HConfig | None = child
+        while current is not None and not current.is_root:
+            path_parts.insert(0, current.text)
+            current = current.parent
 
         # Get children details
         children_details = tuple(
@@ -312,7 +310,7 @@ class RemediationReporter:  # noqa: PLR0904
         max_devices: int | None = None,
         include_tags: Iterable[str] = (),
         exclude_tags: Iterable[str] = (),
-    ) -> tuple[HConfigChild, ...]:
+    ) -> tuple[HConfig, ...]:
         """Get changes affecting a certain number of devices.
 
         Args:
@@ -322,7 +320,7 @@ class RemediationReporter:  # noqa: PLR0904
             exclude_tags: Exclude changes with these tags.
 
         Returns:
-            A tuple of HConfigChild objects matching the criteria.
+            A tuple of HConfig objects matching the criteria.
 
         Example:
             ```python
@@ -342,7 +340,7 @@ class RemediationReporter:  # noqa: PLR0904
             exclude_tags=exclude_tags,
         )
 
-        filtered_changes: list[HConfigChild] = []
+        filtered_changes: list[HConfig] = []
         for child in all_changes:
             instance_count = len(child.instances)
             if instance_count >= min_devices and (
@@ -350,7 +348,7 @@ class RemediationReporter:  # noqa: PLR0904
             ):
                 filtered_changes.append(child)
 
-        result: tuple[HConfigChild, ...] = tuple(filtered_changes)
+        result: tuple[HConfig, ...] = tuple(filtered_changes)
         return result
 
     def get_top_changes(
@@ -359,7 +357,7 @@ class RemediationReporter:  # noqa: PLR0904
         *,
         include_tags: Iterable[str] = (),
         exclude_tags: Iterable[str] = (),
-    ) -> tuple[tuple[HConfigChild, int], ...]:
+    ) -> tuple[tuple[HConfig, int], ...]:
         """Get the top N most common changes across devices.
 
         Args:
@@ -368,7 +366,7 @@ class RemediationReporter:  # noqa: PLR0904
             exclude_tags: Exclude changes with these tags.
 
         Returns:
-            A tuple of (HConfigChild, count) pairs, sorted by count descending.
+            A tuple of (HConfig, count) pairs, sorted by count descending.
 
         Example:
             ```python
@@ -396,7 +394,7 @@ class RemediationReporter:  # noqa: PLR0904
         *,
         include_tags: Iterable[str] = (),
         exclude_tags: Iterable[str] = (),
-    ) -> tuple[HConfigChild, ...]:
+    ) -> tuple[HConfig, ...]:
         r"""Get changes matching a regex pattern.
 
         Args:
@@ -405,7 +403,7 @@ class RemediationReporter:  # noqa: PLR0904
             exclude_tags: Exclude changes with these tags.
 
         Returns:
-            A tuple of HConfigChild objects matching the pattern.
+            A tuple of HConfig objects matching the pattern.
 
         Example:
             ```python
@@ -551,7 +549,7 @@ class RemediationReporter:  # noqa: PLR0904
 
         return "\n".join(lines)
 
-    def group_by_parent(self) -> dict[str, list[HConfigChild]]:
+    def group_by_parent(self) -> dict[str, list[HConfig]]:
         """Group all changes by their parent configuration line.
 
         Returns:
@@ -565,11 +563,13 @@ class RemediationReporter:  # noqa: PLR0904
             ```
 
         """
-        groups: dict[str, list[HConfigChild]] = defaultdict(list)
+        groups: dict[str, list[HConfig]] = defaultdict(list)
 
         for child in self.get_all_changes():
             parent_text = (
-                child.parent.text if isinstance(child.parent, HConfigChild) else "root"
+                child.parent.text
+                if child.parent is not None and not child.parent.is_root
+                else "root"
             )
             groups[parent_text].append(child)
 
@@ -637,7 +637,7 @@ class RemediationReporter:  # noqa: PLR0904
         self,
         file_path: str | Path,
         *,
-        style: str = "merged",
+        style: TextStyle = "merged",
         include_tags: Iterable[str] = (),
         exclude_tags: Iterable[str] = (),
     ) -> None:
@@ -660,7 +660,7 @@ class RemediationReporter:  # noqa: PLR0904
             exclude_tags=exclude_tags,
         )
 
-        lines = [child.cisco_style_text(style=style) for child in changes]
+        lines = [child.render(style=style) for child in changes]
 
         output_path = Path(file_path)
         output_path.write_text("\n".join(lines), encoding="utf-8")

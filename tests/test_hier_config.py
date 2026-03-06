@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from hier_config import (
-    HConfigChild,
+    HConfig,
     WorkflowRemediation,
     get_hconfig,
     get_hconfig_driver,
@@ -18,6 +18,7 @@ from hier_config import (
 from hier_config.exceptions import DuplicateChildError
 from hier_config.models import IdempotentCommandsRule, Instance, MatchRule, Platform
 from hier_config.platforms.cisco_ios.driver import HConfigDriverCiscoIOS
+from hier_config.platforms.driver_base import IdempotencyRules
 
 
 def test_bool(platform_a: Platform) -> None:
@@ -292,15 +293,15 @@ def test_path(platform_a: Platform) -> None:
     assert tuple(config_aaa.path()) == ("a", "aa", "aaa")
 
 
-def test_cisco_style_text(platform_a: Platform) -> None:
+def test_render(platform_a: Platform) -> None:
     ip_address = (
         get_hconfig(platform_a)
         .add_child("interface Vlan2")
         .add_child("ip address 192.168.1.1 255.255.255.0")
     )
-    assert ip_address.cisco_style_text() == "  ip address 192.168.1.1 255.255.255.0"
-    assert isinstance(ip_address.cisco_style_text(), str)
-    assert not isinstance(ip_address.cisco_style_text(), list)
+    assert ip_address.render() == "  ip address 192.168.1.1 255.255.255.0"
+    assert isinstance(ip_address.render(), str)
+    assert not isinstance(ip_address.render(), list)
 
 
 def test_all_children_sorted_by_tags(platform_a: Platform) -> None:
@@ -479,7 +480,7 @@ def test_future_config(platform_a: Platform) -> None:
     config.add_children_deep(("a", "no az"))
 
     future_config = running_config.future(config)
-    assert tuple(c.cisco_style_text() for c in future_config.all_children()) == (
+    assert tuple(c.render() for c in future_config.all_children()) == (
         "a",
         "  ac",  # config lines are added first
         "  no az",
@@ -534,11 +535,19 @@ def test_future_preserves_bgp_neighbor_description() -> None:
 def test_idempotency_key_with_equals_string() -> None:
     """Test idempotency key generation with equals constraint as string."""
     driver = HConfigDriverCiscoIOS()
-    # Add a rule with equals as string
-    driver.rules.idempotent_commands.append(
-        IdempotentCommandsRule(
-            match_rules=(MatchRule(equals="logging console"),),
-        )
+    # Add a rule with equals as string by extending the existing rules
+    driver.rules = driver.rules.model_copy(
+        update={
+            "idempotency": IdempotencyRules(
+                idempotent_commands=(
+                    *driver.rules.idempotency.idempotent_commands,
+                    IdempotentCommandsRule(
+                        match_rules=(MatchRule(equals="logging console"),),
+                    ),
+                ),
+                idempotent_commands_avoid=driver.rules.idempotency.idempotent_commands_avoid,
+            ),
+        }
     )
 
     config_raw = """logging console
@@ -921,6 +930,136 @@ def test_idempotency_key_regex_trimmed_to_no_match() -> None:
     assert key == ("text|logging console",)
 
 
+def test_idempotency_key_extract_basic() -> None:
+    """Test key_extract produces explicit keys from named group."""
+    driver = HConfigDriverCiscoIOS()
+
+    config_raw = """router bgp 65000
+  neighbor 10.1.1.1 description peer1
+"""
+    config = get_hconfig(driver, config_raw)
+    bgp = next(iter(config.children))
+    neighbor = next(iter(bgp.children))
+
+    rule_match = (
+        MatchRule(startswith="router bgp"),
+        MatchRule(re_search=r"neighbor \S+ description"),
+    )
+    key = driver._idempotency_key(  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        neighbor, rule_match, key_extract=r"neighbor (?P<key>\S+)"
+    )
+    assert key == ("startswith|router bgp", "extract|10.1.1.1")
+
+
+def test_idempotency_key_extract_distinguishes_neighbors() -> None:
+    """Regression test for issue #157: different BGP neighbors must not collide."""
+    driver = HConfigDriverCiscoIOS()
+
+    config_raw = """router bgp 65000
+  neighbor 2.2.2.2 description foo
+  neighbor 3.3.3.3 description bar
+"""
+    config = get_hconfig(driver, config_raw)
+    bgp = next(iter(config.children))
+    children = list(bgp.children)
+    assert len(children) == 2
+
+    rule_match = (
+        MatchRule(startswith="router bgp"),
+        MatchRule(re_search=r"neighbor \S+ description"),
+    )
+    key_extract = r"neighbor (?P<key>\S+)"
+
+    key1 = driver._idempotency_key(children[0], rule_match, key_extract)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+    key2 = driver._idempotency_key(children[1], rule_match, key_extract)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+
+    assert key1 != key2
+    assert key1 == ("startswith|router bgp", "extract|2.2.2.2")
+    assert key2 == ("startswith|router bgp", "extract|3.3.3.3")
+
+
+def test_idempotency_key_extract_no_match_falls_back() -> None:
+    """key_extract that doesn't match falls back to normal key generation."""
+    driver = HConfigDriverCiscoIOS()
+
+    config_raw = """interface GigabitEthernet1
+  description test
+"""
+    config = get_hconfig(driver, config_raw)
+    intf = next(iter(config.children))
+    desc = next(iter(intf.children))
+
+    rule_match = (
+        MatchRule(startswith="interface"),
+        MatchRule(startswith="description"),
+    )
+    # key_extract that won't match "description test"
+    key = driver._idempotency_key(  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        desc, rule_match, key_extract=r"neighbor (?P<key>\S+)"
+    )
+    # Should fall back to normal component key
+    assert key == ("startswith|interface", "startswith|description")
+
+
+def test_idempotency_key_extract_none_uses_legacy() -> None:
+    """key_extract=None preserves the existing key generation behavior."""
+    driver = HConfigDriverCiscoIOS()
+
+    config_raw = """router bgp 65000
+  neighbor 10.1.1.1 description peer1
+"""
+    config = get_hconfig(driver, config_raw)
+    bgp = next(iter(config.children))
+    neighbor = next(iter(bgp.children))
+
+    rule_match = (
+        MatchRule(startswith="router bgp"),
+        MatchRule(re_search=r"neighbor (\S+) description"),
+    )
+    # Without key_extract, uses legacy regex group normalization
+    key = driver._idempotency_key(neighbor, rule_match, key_extract=None)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+    assert key == ("startswith|router bgp", "re|10.1.1.1")
+
+
+def test_idempotent_for_with_key_extract() -> None:
+    """End-to-end test: idempotent_for correctly uses key_extract from a rule."""
+    driver = HConfigDriverCiscoIOS()
+    driver.rules = driver.rules.model_copy(
+        update={
+            "idempotency": IdempotencyRules(
+                idempotent_commands=(
+                    IdempotentCommandsRule(
+                        match_rules=(
+                            MatchRule(startswith="router bgp"),
+                            MatchRule(re_search=r"neighbor \S+ description"),
+                        ),
+                        key_extract=r"neighbor (?P<key>\S+)",
+                    ),
+                ),
+            ),
+        }
+    )
+
+    running_raw = """router bgp 65000
+  neighbor 2.2.2.2 description old-desc
+  neighbor 3.3.3.3 description other
+"""
+    generated_raw = """router bgp 65000
+  neighbor 2.2.2.2 description new-desc
+  neighbor 3.3.3.3 description other
+"""
+    running = get_hconfig(driver, running_raw)
+    generated = get_hconfig(driver, generated_raw)
+    remediation = running.config_to_get_to(generated)
+
+    remediation_lines = [c.render() for c in remediation.all_children_sorted()]
+    # Should update 2.2.2.2 description without removing 3.3.3.3
+    assert any(
+        "neighbor 2.2.2.2 description new-desc" in line for line in remediation_lines
+    )
+    assert not any("3.3.3.3" in line for line in remediation_lines)
+
+
 def test_difference1(platform_a: Platform) -> None:
     rc = ("a", " a1", " a2", " a3", "b")
     step = ("a", " a1", " a2", " a3", " a4", " a5", "b", "c", "d", " d1")
@@ -929,19 +1068,17 @@ def test_difference1(platform_a: Platform) -> None:
     difference = get_hconfig(
         get_hconfig_driver(platform_a), "\n".join(step)
     ).difference(rc_hier)
-    difference_children = tuple(
-        c.cisco_style_text() for c in difference.all_children_sorted()
-    )
+    difference_children = tuple(c.render() for c in difference.all_children_sorted())
 
     assert len(difference_children) == 6
     assert "c" in difference.children
     assert "d" in difference.children
     difference_a = difference.get_child(equals="a")
-    assert isinstance(difference_a, HConfigChild)
+    assert isinstance(difference_a, HConfig)
     assert "a4" in difference_a.children
     assert "a5" in difference_a.children
     difference_d = difference.get_child(equals="d")
-    assert isinstance(difference_d, HConfigChild)
+    assert isinstance(difference_d, HConfig)
     assert "d1" in difference_d.children
 
 
@@ -953,8 +1090,7 @@ def test_difference2() -> None:
     step_hier = get_hconfig(get_hconfig_driver(platform), "\n".join(step))
 
     difference_children = tuple(
-        c.cisco_style_text()
-        for c in step_hier.difference(rc_hier).all_children_sorted()
+        c.render() for c in step_hier.difference(rc_hier).all_children_sorted()
     )
     assert len(difference_children) == 6
 
@@ -967,8 +1103,7 @@ def test_difference3() -> None:
     step_hier = get_hconfig(get_hconfig_driver(platform), "\n".join(step))
 
     difference_children = tuple(
-        c.cisco_style_text()
-        for c in step_hier.difference(rc_hier).all_children_sorted()
+        c.render() for c in step_hier.difference(rc_hier).all_children_sorted()
     )
     assert difference_children == ("ip access-list extended test", "  30 c")
 
@@ -1184,22 +1319,24 @@ def test_add_child_return_if_present() -> None:
 
 
 def test_child_repr() -> None:
-    """Test HConfigChild __repr__ method."""
+    """Test HConfig __repr__ method."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
     child = config.add_child("interface GigabitEthernet0/0")
     subchild = child.add_child("description test")
     repr_str = repr(child)
 
-    assert "HConfigChild(HConfig, interface GigabitEthernet0/0)" in repr_str
+    assert "interface GigabitEthernet0/0" in repr_str
+    assert repr_str.startswith("HConfig(")
 
     repr_str2 = repr(subchild)
 
-    assert "HConfigChild(HConfigChild, description test)" in repr_str2
+    assert "description test" in repr_str2
+    assert repr_str2.startswith("HConfig(")
 
 
 def test_child_ne() -> None:
-    """Test HConfigChild __ne__ method."""
+    """Test HConfig __ne__ method."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
     child1 = config.add_child("interface GigabitEthernet0/0")
@@ -1208,14 +1345,14 @@ def test_child_ne() -> None:
     assert child1 != child2
 
 
-def test_cisco_style_text_with_comments() -> None:
-    """Test cisco_style_text with comments."""
+def test_render_with_comments() -> None:
+    """Test render with comments."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
     child = config.add_child("interface GigabitEthernet0/0")
     child.comments.add("test comment")
     child.comments.add("another comment")
-    line = child.cisco_style_text(style="with_comments")
+    line = child.render(style="with_comments")
 
     assert "!another comment, test comment" in line
 
@@ -1223,14 +1360,14 @@ def test_cisco_style_text_with_comments() -> None:
         id=1, comments=frozenset(["instance comment"]), tags=frozenset(["tag1"])
     )
     child.instances.append(instance)
-    line_merged = child.cisco_style_text(style="merged", tag="tag1")
+    line_merged = child.render(style="merged", tag="tag1")
 
     assert "1 instance" in line_merged
     assert "instance comment" in line_merged
 
     instance2 = Instance(id=2, comments=frozenset(), tags=frozenset(["tag1"]))
     child.instances.append(instance2)
-    line_merged2 = child.cisco_style_text(style="merged", tag="tag1")
+    line_merged2 = child.render(style="merged", tag="tag1")
 
     assert "2 instances" in line_merged2
 
@@ -1348,7 +1485,7 @@ def test_difference_with_negation() -> None:
 
 
 def test_child_lt_comparison() -> None:
-    """Test HConfigChild __lt__ for ordering."""
+    """Test HConfig __lt__ for ordering."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
     child1 = config.add_child("interface GigabitEthernet0/0")
@@ -1361,7 +1498,7 @@ def test_child_lt_comparison() -> None:
 
 
 def test_child_hash_consistency() -> None:
-    """Test HConfigChild __hash__."""
+    """Test HConfig __hash__."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
     child = config.add_child("interface GigabitEthernet0/0")
@@ -1467,13 +1604,13 @@ def test_child_is_match_contains_tuple() -> None:
     assert not interface.is_match(contains=("TenGigabit", "FastEthernet"))
 
 
-def test_child_use_default_for_negation() -> None:
-    """Test use_default_for_negation."""
+def test_driver_use_default_for_negation() -> None:
+    """Test _use_default_for_negation on the driver."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
     interface = config.add_child("interface GigabitEthernet0/0")
     description = interface.add_child("description test")
-    uses_default = description.use_default_for_negation(description)
+    uses_default = config.driver._use_default_for_negation(description)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
 
     assert isinstance(uses_default, bool)
 
@@ -1496,7 +1633,7 @@ def test_child_is_idempotent_command_avoid() -> None:
     config = get_hconfig(platform)
     interface = config.add_child("interface GigabitEthernet0/0")
     ip_address = interface.add_child("ip address 192.168.1.1 255.255.255.0")
-    other_children: list[HConfigChild] = []
+    other_children: list[HConfig] = []
     result = ip_address.is_idempotent_command(other_children)
 
     assert isinstance(result, bool)
@@ -1543,15 +1680,15 @@ def test_child_add_children_deep() -> None:
     assert result.depth() == 3
 
 
-def test_child_default_method() -> None:
-    """Test _default method."""
-    platform = Platform.CISCO_IOS
+def test_negate_child_default_form() -> None:
+    """Test negate_child produces 'default' form when rules match."""
+    platform = Platform.ARISTA_EOS
     config = get_hconfig(platform)
     interface = config.add_child("interface GigabitEthernet0/0")
-    description = interface.add_child("description test")
-    description._default()  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+    child = interface.add_child("logging event link-status")
+    config.driver.negate_child(child)
 
-    assert description.text == "default description test"
+    assert child.text == "default logging event link-status"
 
 
 def test_abstract_methods_coverage() -> None:
@@ -1650,7 +1787,7 @@ def test_difference_with_acl_none_target() -> None:
 
 
 def test_child_eq_comparison() -> None:
-    """Test HConfigChild __eq__ returns False for different text."""
+    """Test HConfig __eq__ returns False for different text."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
     child1 = config.add_child("interface GigabitEthernet0/0")
@@ -1688,13 +1825,13 @@ def test_child_tags_remove_leaf_iterable() -> None:
     assert "tag3" in description.tags
 
 
-def test_child_use_default_for_negation_true() -> None:
-    """Test use_default_for_negation returns True."""
+def test_driver_use_default_for_negation_true() -> None:
+    """Test _use_default_for_negation returns True."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
     interface = config.add_child("interface GigabitEthernet0/0")
     description = interface.add_child("description test")
-    result = description.use_default_for_negation(description)
+    result = config.driver._use_default_for_negation(description)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
 
     assert isinstance(result, bool)
 
@@ -1798,11 +1935,11 @@ def test_hconfig_real_indent_level() -> None:
 
 
 def test_hconfig_parent_property() -> None:
-    """Test HConfig parent property returns self."""
+    """Test HConfig parent property returns None for root."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
 
-    assert config.parent is config
+    assert config.parent is None
 
 
 def test_hconfig_is_leaf() -> None:
@@ -1825,13 +1962,13 @@ def test_hconfig_tags_setter() -> None:
     assert "core" in desc.tags
 
 
-def test_hconfig_add_children_deep_typeerror() -> None:
-    """Test HConfig add_children_deep raises TypeError."""
+def test_hconfig_add_children_deep_empty() -> None:
+    """Test HConfig add_children_deep with empty lines returns root."""
     platform = Platform.CISCO_IOS
     config = get_hconfig(platform)
 
-    with pytest.raises(TypeError, match="base was an HConfig object"):
-        config.add_children_deep([])
+    result = config.add_children_deep([])
+    assert result is config
 
 
 def test_hconfig_deep_copy() -> None:
@@ -1853,3 +1990,207 @@ def test_hconfig_deep_copy() -> None:
     assert original_interface is not None
     assert copied_interface is not None
     assert original_interface is not copied_interface
+
+
+def test_hconfig_children_get_all_single() -> None:
+    """Test get_all() returns a single-element tuple for unique children."""
+    config = get_hconfig(Platform.CISCO_IOS)
+    config.add_child("interface GigabitEthernet0/0")
+    result = config.children.get_all("interface GigabitEthernet0/0")
+
+    assert len(result) == 1
+    assert result[0].text == "interface GigabitEthernet0/0"
+
+
+def test_hconfig_children_get_all_missing() -> None:
+    """Test get_all() returns empty tuple for missing key."""
+    config = get_hconfig(Platform.CISCO_IOS)
+    result = config.children.get_all("interface GigabitEthernet0/0")
+
+    assert not result
+
+
+def test_hconfig_children_get_all_duplicates() -> None:
+    """Test get_all() returns all duplicates when duplicates are allowed."""
+    platform = Platform.CISCO_IOS
+    config = get_hconfig_fast_load(
+        platform,
+        (
+            "router eigrp EIGRP_INSTANCE",
+            " address-family ipv4 unicast autonomous-system 10000",
+            "  af-interface default",
+            "   passive-interface",
+            "  exit-af-interface",
+            "  af-interface Vlan100",
+            "   no passive-interface",
+            "  exit-af-interface",
+        ),
+    )
+    router = config.get_child(startswith="router eigrp")
+    assert router is not None
+    addr_family = router.get_child(startswith="address-family")
+    assert addr_family is not None
+
+    # "exit-af-interface" appears twice as a duplicate child
+    all_exits = addr_family.children.get_all("exit-af-interface")
+    assert len(all_exits) == 2
+    assert all(c.text == "exit-af-interface" for c in all_exits)
+
+    # get() should still return the first one
+    first = addr_family.children.get("exit-af-interface")
+    assert first is all_exits[0]
+
+
+def test_hconfig_children_getitem_str_returns_first_duplicate() -> None:
+    """Test children['text'] returns first child when duplicates exist."""
+    platform = Platform.CISCO_IOS
+    config = get_hconfig_fast_load(
+        platform,
+        (
+            "router eigrp EIGRP_INSTANCE",
+            " address-family ipv4 unicast autonomous-system 10000",
+            "  af-interface default",
+            "   passive-interface",
+            "  exit-af-interface",
+            "  af-interface Vlan100",
+            "   no passive-interface",
+            "  exit-af-interface",
+        ),
+    )
+    router = config.get_child(startswith="router eigrp")
+    assert router is not None
+    addr_family = router.get_child(startswith="address-family")
+    assert addr_family is not None
+
+    child = addr_family.children["exit-af-interface"]
+    all_children = addr_family.children.get_all("exit-af-interface")
+    assert child is all_children[0]
+
+
+def test_hconfig_children_delete_one_duplicate() -> None:
+    """Test deleting one duplicate instance leaves others in get_all()."""
+    platform = Platform.CISCO_IOS
+    config = get_hconfig_fast_load(
+        platform,
+        (
+            "router eigrp EIGRP_INSTANCE",
+            " address-family ipv4 unicast autonomous-system 10000",
+            "  af-interface default",
+            "   passive-interface",
+            "  exit-af-interface",
+            "  af-interface Vlan100",
+            "   no passive-interface",
+            "  exit-af-interface",
+        ),
+    )
+    router = config.get_child(startswith="router eigrp")
+    assert router is not None
+    addr_family = router.get_child(startswith="address-family")
+    assert addr_family is not None
+
+    all_exits = addr_family.children.get_all("exit-af-interface")
+    assert len(all_exits) == 2
+
+    # Delete the first instance
+    addr_family.children.delete(all_exits[0])
+    remaining = addr_family.children.get_all("exit-af-interface")
+    assert len(remaining) == 1
+    assert remaining[0] is all_exits[1]
+
+
+def test_hconfig_children_delete_by_text_removes_all_duplicates() -> None:
+    """Test deleting by text removes all duplicates."""
+    platform = Platform.CISCO_IOS
+    config = get_hconfig_fast_load(
+        platform,
+        (
+            "router eigrp EIGRP_INSTANCE",
+            " address-family ipv4 unicast autonomous-system 10000",
+            "  af-interface default",
+            "   passive-interface",
+            "  exit-af-interface",
+            "  af-interface Vlan100",
+            "   no passive-interface",
+            "  exit-af-interface",
+        ),
+    )
+    router = config.get_child(startswith="router eigrp")
+    assert router is not None
+    addr_family = router.get_child(startswith="address-family")
+    assert addr_family is not None
+
+    addr_family.children.delete("exit-af-interface")
+    assert addr_family.children.get_all("exit-af-interface") == ()
+    assert addr_family.children.get("exit-af-interface") is None
+
+
+def test_hconfig_from_text() -> None:
+    """Test HConfig.from_text() class method."""
+    config = HConfig.from_text(
+        Platform.CISCO_IOS,
+        "interface GigabitEthernet0/0\n ip address 192.168.1.1 255.255.255.0",
+    )
+    assert config.is_root
+    assert config.get_child(equals="interface GigabitEthernet0/0") is not None
+
+
+def test_hconfig_from_lines() -> None:
+    """Test HConfig.from_lines() class method."""
+    config = HConfig.from_lines(
+        Platform.CISCO_IOS,
+        (
+            "interface GigabitEthernet0/0",
+            " ip address 192.168.1.1 255.255.255.0",
+        ),
+    )
+    assert config.is_root
+    iface = config.get_child(equals="interface GigabitEthernet0/0")
+    assert iface is not None
+    assert iface.get_child(startswith="ip address") is not None
+
+
+def test_hconfig_from_dump() -> None:
+    """Test HConfig.from_dump() class method roundtrip."""
+    original = HConfig.from_lines(
+        Platform.CISCO_IOS,
+        ("interface GigabitEthernet0/0", " ip address 192.168.1.1 255.255.255.0"),
+    )
+    dump = original.dump()
+    restored = HConfig.from_dump(Platform.CISCO_IOS, dump)
+    assert restored == original
+
+
+def test_all_children_sorted_with_key() -> None:
+    """Test all_children_sorted with a custom key function."""
+    config = HConfig.from_lines(
+        Platform.CISCO_IOS,
+        ("interface Vlan2", "interface Vlan1", "interface Vlan3"),
+    )
+    # Sort alphabetically by text instead of by order_weight
+    sorted_children = list(config.all_children_sorted(key=lambda c: c.text))
+    assert [c.text for c in sorted_children] == [
+        "interface Vlan1",
+        "interface Vlan2",
+        "interface Vlan3",
+    ]
+
+
+def test_child_count() -> None:
+    """Test child_count property returns direct child count."""
+    config = HConfig.from_lines(
+        Platform.CISCO_IOS,
+        (
+            "interface GigabitEthernet0/0",
+            " ip address 192.168.1.1 255.255.255.0",
+            " no shutdown",
+            "interface GigabitEthernet0/1",
+        ),
+    )
+    # Root has 2 direct children (interfaces)
+    assert config.child_count == 2
+    # __len__ counts all descendants
+    assert len(config) == 4
+    # First interface has 2 children
+    iface = config.get_child(equals="interface GigabitEthernet0/0")
+    assert iface is not None
+    assert iface.child_count == 2

@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document describes the internal design of hier_config v3, covering the three main layers: the hierarchical tree model, the driver system, and the workflow / reporting layer.
+This document describes the internal design of hier_config, covering the three main layers: the hierarchical tree model, the driver system, and the workflow / reporting layer.
 
 ---
 
@@ -18,15 +18,21 @@ hier_config is built around a three-layer model:
 
 ## Core Tree Model
 
-The tree layer lives in `hier_config/base.py`, `hier_config/root.py`, `hier_config/child.py`, and `hier_config/children.py`.
+The tree layer lives in `hier_config/root.py` and `hier_config/children.py`.
 
-### `HConfig` (root node)
+### `HConfig` (unified node)
 
-`HConfig` is the entry point of every configuration tree.  It owns:
+`HConfig` is the single node type used for both root and child positions in the tree.  When constructed with an `HConfigDriverBase`, it becomes the **root**; when constructed with another `HConfig` as parent, it becomes a **child**.
 
-- A reference to the **driver** for the platform.
-- An `HConfigChildren` collection of top-level `HConfigChild` nodes.
+Each node holds:
+
+- `text` — the raw configuration line (stripped); empty for the root.
+- `parent` — a reference to the parent `HConfig`, or `None` for the root.
+- `children` — an `HConfigChildren` collection of child nodes.
+- `driver` — resolves to the root's driver via the parent chain.
+- Metadata: `tags`, `comments`, `order_weight`, `new_in_config`, `instances`, `facts`.
 - High-level operations: `future()`, `config_to_get_to()`, `merge()`, `difference()`, `dump()`.
+- Class method constructors: `HConfig.from_text()`, `HConfig.from_dump()`, `HConfig.from_lines()`.
 
 Create an `HConfig` object via the constructor function:
 
@@ -36,34 +42,14 @@ from hier_config import get_hconfig, Platform
 hconfig = get_hconfig(Platform.CISCO_IOS, config_text)
 ```
 
-### `HConfigChild` (tree node)
-
-Each non-root node holds:
-
-- `text` — the raw configuration line (stripped).
-- `parent` — a reference to the parent `HConfig` or `HConfigChild`.
-- `children` — an `HConfigChildren` collection of its own children.
-- Metadata: `tags`, `comments`, `order_weight`, `new_in_config`, `instances`, `facts`.
-
-`HConfigChild` inherits all tree-manipulation methods from `HConfigBase`.
-
 ### `HConfigChildren` (ordered collection)
 
 `HConfigChildren` maintains two data structures in parallel:
 
-- `_data: list[HConfigChild]` — preserves insertion order.
-- `_mapping: dict[str, HConfigChild]` — maps `child.text` → first child for O(1) look-up.
+- `_data: list[HConfig]` — preserves insertion order.
+- `_mapping: dict[str, HConfig | list[HConfig]]` — maps `child.text` to one or more children for O(1) look-up.
 
-When duplicate text is allowed (via `ParentAllowsDuplicateChildRule`), the list holds all copies while the mapping points to only the first.
-
-### `HConfigBase` (abstract base)
-
-Both `HConfig` and `HConfigChild` inherit from `HConfigBase`, which provides:
-
-- Child manipulation: `add_child`, `add_children`, `add_deep_copy_of`, `add_shallow_copy_of`.
-- Searching: `get_child`, `get_children`, `get_child_deep`, `get_children_deep`.
-- Diffing: `unified_diff`, `_config_to_get_to`, `_difference`.
-- Future prediction: `_future`, `_future_pre`.
+When duplicate text is allowed (via `ParentAllowsDuplicateChildRule`), both the list and the mapping's list variant hold all copies.  `get()` returns the first occurrence; `get_all()` returns all occurrences.
 
 ---
 
@@ -80,23 +66,17 @@ Every platform driver subclasses `HConfigDriverBase` (`hier_config/platforms/dri
 
 ### `HConfigDriverRules`
 
-A frozen Pydantic model holding lists of typed rule objects:
+A frozen Pydantic model with rules organized into composable sub-groups:
 
-| Field | Rule type | Effect |
+| Group | Sub-model | Fields |
 |-------|-----------|--------|
-| `negate_with` | `NegationDefaultWithRule` | Replace negation with a fixed command |
-| `negation_default_when` | `NegationDefaultWhenRule` | Use `default` form instead of `no` |
-| `sectional_exiting` | `SectionalExitingRule` | Emit an exit token at end of section |
-| `sectional_overwrite` | `SectionalOverwriteRule` | Negate + re-create whole section |
-| `sectional_overwrite_no_negate` | `SectionalOverwriteNoNegateRule` | Re-create without prior negation |
-| `ordering` | `OrderingRule` | Assign integer weights for apply order |
-| `idempotent_commands` | `IdempotentCommandsRule` | Last-value-wins commands |
-| `idempotent_commands_avoid` | `IdempotentCommandsAvoidRule` | Exclude from idempotency matching |
-| `per_line_sub` | `PerLineSubRule` | Line-level regex substitution on load |
-| `full_text_sub` | `FullTextSubRule` | Full-text regex substitution on load |
-| `indent_adjust` | `IndentAdjustRule` | Shift indentation at start/end markers |
-| `parent_allows_duplicate_child` | `ParentAllowsDuplicateChildRule` | Permit duplicate child text |
-| `post_load_callbacks` | `Callable[[HConfig], None]` | Run Python callbacks after parsing |
+| `parsing` | `ParsingRules` | `full_text_sub`, `per_line_sub`, `indent_adjust`, `indentation`, `post_load_callbacks` |
+| `negation` | `NegationRules` | `negate_with`, `negation_default_when` |
+| `idempotency` | `IdempotencyRules` | `idempotent_commands`, `idempotent_commands_avoid` |
+| `sectional` | `SectionalRules` | `sectional_exiting`, `sectional_overwrite`, `sectional_overwrite_no_negate` |
+| *(top-level)* | — | `ordering`, `parent_allows_duplicate_child`, `remediation_transform_callbacks` |
+
+All rule fields are immutable tuples.  To modify rules, use `model_copy(update=...)` on the sub-model or the `HConfigDriverRules` instance.
 
 ### Built-in Platform Drivers
 
@@ -200,7 +180,7 @@ per_line_sub / full_text_sub  (driver preprocessing)
 config_preprocessor()         (optional platform transform, e.g. JunOS → set commands)
     │
     ▼
-HConfig tree                  (HConfigBase / HConfigChild nodes)
+HConfig tree                  (unified HConfig nodes)
     │
     ├──► HConfig.future()     → predicted post-change HConfig
     │

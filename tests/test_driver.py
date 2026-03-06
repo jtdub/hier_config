@@ -1,5 +1,4 @@
 from hier_config import get_hconfig_driver
-from hier_config.child import HConfigChild
 from hier_config.constructors import get_hconfig
 from hier_config.models import Platform
 from hier_config.platforms.arista_eos.driver import HConfigDriverAristaEOS
@@ -10,6 +9,7 @@ from hier_config.platforms.generic.driver import HConfigDriverGeneric
 from hier_config.platforms.hp_comware5.driver import HConfigDriverHPComware5
 from hier_config.platforms.hp_procurve.driver import HConfigDriverHPProcurve
 from hier_config.platforms.vyos.driver import HConfigDriverVYOS
+from hier_config.root import HConfig
 
 
 def test_get_hconfig_driver() -> None:
@@ -31,10 +31,10 @@ def test_driver_base_properties() -> None:
     assert driver.negation_prefix == "no "
 
     config = get_hconfig(Platform.GENERIC)
-    child = HConfigChild(config, "interface GigabitEthernet0/0")
+    child = HConfig(config, "interface GigabitEthernet0/0")
     result = driver.swap_negation(child)
     assert result.text == "no interface GigabitEthernet0/0"
 
-    child2 = HConfigChild(config, "no interface GigabitEthernet0/1")
+    child2 = HConfig(config, "no interface GigabitEthernet0/1")
     result2 = driver.swap_negation(child2)
     assert result2.text == "interface GigabitEthernet0/1"

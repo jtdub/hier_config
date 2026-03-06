@@ -1,7 +1,7 @@
 from hier_config import WorkflowRemediation, get_hconfig, get_hconfig_fast_load
-from hier_config.child import HConfigChild
 from hier_config.models import Platform
 from hier_config.platforms.vyos.driver import HConfigDriverVYOS
+from hier_config.root import HConfig
 
 
 def test_vyos_basic_remediation() -> None:
@@ -26,7 +26,7 @@ def test_swap_negation_delete_to_set() -> None:
     root = get_hconfig(platform)
 
     # Create a child with 'delete' prefix
-    child = HConfigChild(root, "delete interfaces ethernet eth0 address 192.168.1.1/24")
+    child = HConfig(root, "delete interfaces ethernet eth0 address 192.168.1.1/24")
 
     # Swap negation should convert to 'set'
     result = driver.swap_negation(child)
@@ -42,7 +42,7 @@ def test_swap_negation_set_to_delete() -> None:
     root = get_hconfig(platform)
 
     # Create a child with 'set' prefix
-    child = HConfigChild(root, "set interfaces ethernet eth0 address 192.168.1.1/24")
+    child = HConfig(root, "set interfaces ethernet eth0 address 192.168.1.1/24")
 
     # Swap negation should convert to 'delete'
     result = driver.swap_negation(child)
@@ -58,7 +58,7 @@ def test_swap_negation_no_prefix() -> None:
     root = get_hconfig(platform)
 
     # Create a child without proper prefix
-    child = HConfigChild(root, "interfaces ethernet eth0 address 192.168.1.1/24")
+    child = HConfig(root, "interfaces ethernet eth0 address 192.168.1.1/24")
     original_text = child.text
 
     # VyOS driver doesn't raise an error, it just returns the child unchanged

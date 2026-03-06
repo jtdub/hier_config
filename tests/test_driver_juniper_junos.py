@@ -1,9 +1,9 @@
 import pytest
 
 from hier_config import WorkflowRemediation, get_hconfig, get_hconfig_fast_load
-from hier_config.child import HConfigChild
 from hier_config.models import Platform
 from hier_config.platforms.juniper_junos.driver import HConfigDriverJuniperJUNOS
+from hier_config.root import HConfig
 
 # Tests moved from test_juniper_syntax.py
 
@@ -65,7 +65,7 @@ def test_swap_negation_delete_to_set() -> None:
     root = get_hconfig(platform)
 
     # Create a child with 'delete' prefix
-    child = HConfigChild(root, "delete vlans test_vlan vlan-id 100")
+    child = HConfig(root, "delete vlans test_vlan vlan-id 100")
 
     # Swap negation should convert to 'set'
     result = driver.swap_negation(child)
@@ -81,7 +81,7 @@ def test_swap_negation_set_to_delete() -> None:
     root = get_hconfig(platform)
 
     # Create a child with 'set' prefix
-    child = HConfigChild(root, "set vlans test_vlan vlan-id 100")
+    child = HConfig(root, "set vlans test_vlan vlan-id 100")
 
     # Swap negation should convert to 'delete'
     result = driver.swap_negation(child)
@@ -97,7 +97,7 @@ def test_swap_negation_invalid_prefix() -> None:
     root = get_hconfig(platform)
 
     # Create a child without proper prefix
-    child = HConfigChild(root, "vlans test_vlan vlan-id 100")
+    child = HConfig(root, "vlans test_vlan vlan-id 100")
 
     # Should raise ValueError
     with pytest.raises(ValueError, match="did not start with") as exc_info:

@@ -1,6 +1,6 @@
-from hier_config.child import HConfigChild
 from hier_config.platforms.driver_base import HConfigDriverBase, HConfigDriverRules
 from hier_config.platforms.functions import convert_to_set_commands
+from hier_config.root import HConfig
 
 
 class HConfigDriverVYOS(HConfigDriverBase):  # pylint: disable=too-many-instance-attributes
@@ -12,7 +12,7 @@ class HConfigDriverVYOS(HConfigDriverBase):  # pylint: disable=too-many-instance
     ``"delete "``.  Platform enum: ``Platform.VYOS``.
     """
 
-    def swap_negation(self, child: HConfigChild) -> HConfigChild:
+    def swap_negation(self, child: HConfig) -> HConfig:
         """Swap negation of a `self.text`."""
         if child.text.startswith(self.negation_prefix):
             child.text = f"{self.declaration_prefix}{child.text_without_negation}"

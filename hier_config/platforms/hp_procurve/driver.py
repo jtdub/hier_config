@@ -1,7 +1,6 @@
 import re
 from collections.abc import Iterable
 
-from hier_config.child import HConfigChild
 from hier_config.models import (
     IdempotentCommandsRule,
     MatchRule,
@@ -9,7 +8,13 @@ from hier_config.models import (
     OrderingRule,
     PerLineSubRule,
 )
-from hier_config.platforms.driver_base import HConfigDriverBase, HConfigDriverRules
+from hier_config.platforms.driver_base import (
+    HConfigDriverBase,
+    HConfigDriverRules,
+    IdempotencyRules,
+    NegationRules,
+    ParsingRules,
+)
 from hier_config.platforms.hp_procurve.functions import hp_procurve_expand_range
 from hier_config.root import HConfig
 
@@ -123,9 +128,9 @@ class HConfigDriverHPProcurve(HConfigDriverBase):
 
     def idempotent_for(
         self,
-        config: HConfigChild,
-        other_children: Iterable[HConfigChild],
-    ) -> HConfigChild | None:
+        config: HConfig,
+        other_children: Iterable[HConfig],
+    ) -> HConfig | None:
         if result := super().idempotent_for(config, other_children):
             return result
 
@@ -156,9 +161,9 @@ class HConfigDriverHPProcurve(HConfigDriverBase):
     def _idempotent_for_helper(
         expression: str,
         end_index: int,
-        config: HConfigChild,
-        other_children: Iterable[HConfigChild],
-    ) -> HConfigChild | None:
+        config: HConfig,
+        other_children: Iterable[HConfig],
+    ) -> HConfig | None:
         if re.search(expression, config.text):
             words = config.text.split()
             startswith = " ".join(words[:end_index])
@@ -167,7 +172,7 @@ class HConfigDriverHPProcurve(HConfigDriverBase):
                     return other_child
         return None
 
-    def negate_with(self, config: HConfigChild) -> str | None:
+    def negate_with(self, config: HConfig) -> str | None:
         result = super().negate_with(config)
         if isinstance(result, str):
             return result
@@ -213,7 +218,7 @@ class HConfigDriverHPProcurve(HConfigDriverBase):
         end_index: int,
         prepend: str,
         append: str,
-        config: HConfigChild,
+        config: HConfig,
     ) -> str | None:
         if re.search(expression, config.text):
             words = config.text.split()
@@ -223,54 +228,65 @@ class HConfigDriverHPProcurve(HConfigDriverBase):
     @staticmethod
     def _instantiate_rules() -> HConfigDriverRules:
         return HConfigDriverRules(
-            negate_with=[
-                NegationDefaultWithRule(
-                    match_rules=(
-                        MatchRule(startswith="interface "),
-                        MatchRule(equals="disable"),
+            negation=NegationRules(
+                negate_with=(
+                    NegationDefaultWithRule(
+                        match_rules=(
+                            MatchRule(startswith="interface "),
+                            MatchRule(equals="disable"),
+                        ),
+                        use="enable",
                     ),
-                    use="enable",
-                ),
-                NegationDefaultWithRule(
-                    match_rules=(
-                        MatchRule(startswith="interface "),
-                        MatchRule(startswith="name "),
+                    NegationDefaultWithRule(
+                        match_rules=(
+                            MatchRule(startswith="interface "),
+                            MatchRule(startswith="name "),
+                        ),
+                        use="no name",
                     ),
-                    use="no name",
                 ),
-            ],
-            per_line_sub=[
-                PerLineSubRule(search=r"^\s*[#!].*", replace=""),
-                PerLineSubRule(search=r"^; .*", replace=""),
-                PerLineSubRule(search=r"^Running configuration:*", replace=""),
-            ],
-            idempotent_commands=[
-                IdempotentCommandsRule(
-                    match_rules=(
-                        MatchRule(
-                            startswith="aaa authentication port-access eap-radius"
+            ),
+            parsing=ParsingRules(
+                per_line_sub=(
+                    PerLineSubRule(search=r"^\s*[#!].*", replace=""),
+                    PerLineSubRule(search=r"^; .*", replace=""),
+                    PerLineSubRule(search=r"^Running configuration:*", replace=""),
+                ),
+                post_load_callbacks=(
+                    _fixup_hp_procurve_aaa_port_access_fixup,
+                    _fixup_hp_procurve_device_profile,
+                    _fixup_hp_procurve_vlan,
+                ),
+            ),
+            idempotency=IdempotencyRules(
+                idempotent_commands=(
+                    IdempotentCommandsRule(
+                        match_rules=(
+                            MatchRule(
+                                startswith="aaa authentication port-access eap-radius"
+                            ),
+                        ),
+                    ),
+                    IdempotentCommandsRule(
+                        match_rules=(
+                            MatchRule(startswith="aaa accounting update periodic "),
+                        ),
+                    ),
+                    IdempotentCommandsRule(
+                        match_rules=(
+                            MatchRule(startswith="interface "),
+                            MatchRule(startswith="untagged vlan "),
+                        ),
+                    ),
+                    IdempotentCommandsRule(
+                        match_rules=(
+                            MatchRule(startswith="interface "),
+                            MatchRule(startswith="name "),
                         ),
                     ),
                 ),
-                IdempotentCommandsRule(
-                    match_rules=(
-                        MatchRule(startswith="aaa accounting update periodic "),
-                    ),
-                ),
-                IdempotentCommandsRule(
-                    match_rules=(
-                        MatchRule(startswith="interface "),
-                        MatchRule(startswith="untagged vlan "),
-                    ),
-                ),
-                IdempotentCommandsRule(
-                    match_rules=(
-                        MatchRule(startswith="interface "),
-                        MatchRule(startswith="name "),
-                    ),
-                ),
-            ],
-            ordering=[
+            ),
+            ordering=(
                 # no aaa port-access {{ interface_name }} auth-priority  -- needs to happen before auth-order
                 OrderingRule(
                     match_rules=(
@@ -327,10 +343,5 @@ class HConfigDriverHPProcurve(HConfigDriverBase):
                     match_rules=(MatchRule(re_search=r"^no radius-server host \S+$"),),
                     weight=30,
                 ),
-            ],
-            post_load_callbacks=[
-                _fixup_hp_procurve_aaa_port_access_fixup,
-                _fixup_hp_procurve_device_profile,
-                _fixup_hp_procurve_vlan,
-            ],
+            ),
         )

@@ -1,13 +1,18 @@
 from collections.abc import Iterable
 
-from hier_config.child import HConfigChild
 from hier_config.models import (
     MatchRule,
     ParentAllowsDuplicateChildRule,
     PerLineSubRule,
     SectionalExitingRule,
 )
-from hier_config.platforms.driver_base import HConfigDriverBase, HConfigDriverRules
+from hier_config.platforms.driver_base import (
+    HConfigDriverBase,
+    HConfigDriverRules,
+    ParsingRules,
+    SectionalRules,
+)
+from hier_config.root import HConfig
 
 
 class HConfigDriverFortinetFortiOS(HConfigDriverBase):
@@ -16,30 +21,34 @@ class HConfigDriverFortinetFortiOS(HConfigDriverBase):
     @staticmethod
     def _instantiate_rules() -> HConfigDriverRules:
         return HConfigDriverRules(
-            sectional_exiting=[
-                SectionalExitingRule(
-                    match_rules=(MatchRule(startswith="config "),), exit_text="end"
-                ),
-                SectionalExitingRule(
-                    match_rules=(
-                        MatchRule(startswith="config "),
-                        MatchRule(startswith="edit "),
+            sectional=SectionalRules(
+                sectional_exiting=(
+                    SectionalExitingRule(
+                        match_rules=(MatchRule(startswith="config "),), exit_text="end"
                     ),
-                    exit_text="next",
+                    SectionalExitingRule(
+                        match_rules=(
+                            MatchRule(startswith="config "),
+                            MatchRule(startswith="edit "),
+                        ),
+                        exit_text="next",
+                    ),
                 ),
-            ],
-            parent_allows_duplicate_child=[
+            ),
+            parent_allows_duplicate_child=(
                 ParentAllowsDuplicateChildRule(
                     match_rules=(MatchRule(startswith="config"),)
                 ),
-            ],
-            per_line_sub=[
-                PerLineSubRule(search="^end$", replace=" end"),
-                PerLineSubRule(search="^next$", replace="  next"),
-            ],
+            ),
+            parsing=ParsingRules(
+                per_line_sub=(
+                    PerLineSubRule(search="^end$", replace=" end"),
+                    PerLineSubRule(search="^next$", replace="  next"),
+                ),
+            ),
         )
 
-    def swap_negation(self, child: HConfigChild) -> HConfigChild:
+    def swap_negation(self, child: HConfig) -> HConfig:
         """Swap negation of a `self.text`."""
         if child.text.startswith(self.negation_prefix):
             child.text = f"{self.declaration_prefix}{child.text_without_negation}"
@@ -49,8 +58,8 @@ class HConfigDriverFortinetFortiOS(HConfigDriverBase):
         return child
 
     def idempotent_for(
-        self, config: HConfigChild, other_children: Iterable[HConfigChild]
-    ) -> HConfigChild | None:
+        self, config: HConfig, other_children: Iterable[HConfig]
+    ) -> HConfig | None:
         """Override idempotent_for to only consider a config idempotent
         if the same command exists in the other set.
         """

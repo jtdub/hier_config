@@ -2,7 +2,6 @@ import re
 from collections.abc import Iterable
 from ipaddress import AddressValueError, IPv4Address, IPv4Interface
 
-from hier_config.child import HConfigChild
 from hier_config.platforms.functions import expand_range
 from hier_config.platforms.hp_procurve.functions import hp_procurve_expand_range
 from hier_config.platforms.models import (
@@ -16,6 +15,7 @@ from hier_config.platforms.view_base import (
     ConfigViewInterfaceBase,
     HConfigViewBase,
 )
+from hier_config.root import HConfig
 
 
 class ConfigViewInterfaceHPProcurve(  # noqa: PLR0904 pylint: disable=abstract-method
@@ -24,13 +24,21 @@ class ConfigViewInterfaceHPProcurve(  # noqa: PLR0904 pylint: disable=abstract-m
     """Interface config view for HP ProCurve / Aruba AOSS."""
 
     @property
+    def _parent_config(self) -> HConfig:
+        """Return the parent config node (never None for interface children)."""
+        if self.config.parent is None:  # pragma: no cover
+            message = "Interface config has no parent"
+            raise TypeError(message)
+        return self.config.parent
+
+    @property
     def bundle_id(self) -> str | None:
         raise NotImplementedError
 
     @property
     def bundle_member_interfaces(self) -> Iterable[str]:
         # trunk 1/45,2/45 trk1 trunk
-        bundle = self.config.parent.get_child(
+        bundle = self._parent_config.get_child(
             re_search=rf"^trunk .* {self.name.lower()} (trunk|lacp)$",
         )
         if self.is_bundle and bundle is None:
@@ -45,7 +53,7 @@ class ConfigViewInterfaceHPProcurve(  # noqa: PLR0904 pylint: disable=abstract-m
 
     @property
     def bundle_name(self) -> str | None:
-        for bundle_def in self.config.parent.get_children(startswith="trunk "):
+        for bundle_def in self._parent_config.get_children(startswith="trunk "):
             interface_range = bundle_def.text.split()[1]
             interfaces = hp_procurve_expand_range(interface_range)
             if self.name in interfaces:
@@ -74,7 +82,7 @@ class ConfigViewInterfaceHPProcurve(  # noqa: PLR0904 pylint: disable=abstract-m
     def has_nac(self) -> bool:
         """Determine if the interface has NAC configured."""
         return any(
-            line in self.config.parent.children
+            line in self._parent_config.children
             for line in (
                 f"aaa port-access authenticator {self.name}",
                 f"aaa port-access mac-based {self.name}",
@@ -122,7 +130,7 @@ class ConfigViewInterfaceHPProcurve(  # noqa: PLR0904 pylint: disable=abstract-m
         """Determine if the interface has NAC control direction in configured."""
         return (
             f"aaa port-access {self.name} controlled-direction in"
-            in self.config.parent.children
+            in self._parent_config.children
         )
 
     @property
@@ -135,7 +143,7 @@ class ConfigViewInterfaceHPProcurve(  # noqa: PLR0904 pylint: disable=abstract-m
     def nac_mab_first(self) -> bool:
         """Determine if the interface has NAC configured for MAB first."""
         return bool(
-            self.config.parent.get_child(
+            self._parent_config.get_child(
                 equals=f"aaa port-access {self.name} auth-order mac-based authenticator",
             ),
         )
@@ -143,7 +151,7 @@ class ConfigViewInterfaceHPProcurve(  # noqa: PLR0904 pylint: disable=abstract-m
     @property
     def nac_max_dot1x_clients(self) -> int:
         """Determine the max dot1x clients."""
-        if child := self.config.parent.get_child(
+        if child := self._parent_config.get_child(
             startswith=f"aaa port-access authenticator {self.name} client-limit ",
         ):
             return int(child.text.split()[5])
@@ -152,7 +160,7 @@ class ConfigViewInterfaceHPProcurve(  # noqa: PLR0904 pylint: disable=abstract-m
     @property
     def nac_max_mab_clients(self) -> int:
         """Determine the max mab clients."""
-        if child := self.config.parent.get_child(
+        if child := self._parent_config.get_child(
             startswith=f"aaa port-access mac-based {self.name} addr-limit ",
         ):
             return int(child.text.split()[5])
@@ -278,7 +286,7 @@ class HConfigViewHPProcurve(HConfigViewBase):
                 yield ConfigViewInterfaceHPProcurve(vlan)
 
     @property
-    def interfaces(self) -> Iterable[HConfigChild]:
+    def interfaces(self) -> Iterable[HConfig]:
         return self.config.get_children(startswith="interface ")
 
     @property

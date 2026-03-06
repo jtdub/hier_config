@@ -21,7 +21,5 @@ def test_issue104() -> None:
         "tacacs-server host 192.168.1.98 key 0 Test135 timeout 3",
         "tacacs-server host 192.168.100.98 key 0 test135 timeout 3",
     }
-    remediation_lines = {
-        line.cisco_style_text() for line in remediation_config.all_children()
-    }
+    remediation_lines = {line.render() for line in remediation_config.all_children()}
     assert expected_rem_lines == remediation_lines
